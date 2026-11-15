@@ -3,6 +3,8 @@ import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
 
 export default defineConfig({
+  // Caminhos relativos: o build funciona na raiz e no subcaminho do GitHub Pages.
+  base: './',
   plugins: [react(), tailwindcss()],
   server: {
     proxy: {
