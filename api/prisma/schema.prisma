@@ -1,0 +1,352 @@
+// Esquema PostgreSQL (especificação, seção 4).
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum PlanType {
+  FREE
+  LEADER_MONTHLY
+  TRANSITION_PASS
+  STORE_MULTI
+  ENTERPRISE
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  EXPIRED
+  PAST_DUE
+  CANCELED
+}
+
+enum UserRole {
+  OWNER
+  STORE_MANAGER
+  SECTION_LEADER
+  HR_AUDITOR
+}
+
+enum DayOfWeek {
+  SEG
+  TER
+  QUA
+  QUI
+  SEX
+  SAB
+  DOM
+}
+
+enum EmployeeStatus {
+  ACTIVE
+  VACATION
+  MEDICAL_LEAVE
+  INACTIVE
+}
+
+enum AssignmentType {
+  WORK
+  OFF
+  ABSENCE
+}
+
+// Valores do domínio: '1_IN_3', '1_IN_2', 'CUSTOM' (mapeados no banco).
+enum SundayRule {
+  ONE_IN_3 @map("1_IN_3")
+  ONE_IN_2 @map("1_IN_2")
+  CUSTOM
+}
+
+enum PaymentGateway {
+  ABACATEPAY
+  ASAAS
+  MERCADOPAGO
+}
+
+enum BillingCycle {
+  MONTHLY
+  YEARLY
+  ONE_TIME_45D
+}
+
+enum PaymentMethod {
+  PIX
+  CREDIT_CARD
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  EXPIRED
+  REFUNDED
+}
+
+enum AbsenceType {
+  VACATION
+  MEDICAL
+  COMP_TIME
+  OTHER
+}
+
+enum ScheduleStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum SwapStatus {
+  PENDING_PEER
+  PENDING_MANAGER
+  APPROVED
+  REJECTED
+}
+
+model Organization {
+  id                    String             @id @default(cuid())
+  name                  String
+  cnpj                  String?
+  plan                  PlanType           @default(FREE)
+  subscriptionStatus    SubscriptionStatus @default(ACTIVE)
+  planExpiresAt         DateTime?
+  gatewayCustomerId     String?
+  gatewaySubscriptionId String?
+  referralCode          String             @unique
+  referredByCode        String?
+  bonusDaysAccumulated  Int                @default(0)
+  createdAt             DateTime           @default(now())
+
+  users        UserAccount[]
+  stores       Store[]
+  departments  Department[]
+  transactions PaymentTransaction[]
+  auditLogs    AuditLog[]
+}
+
+model PaymentTransaction {
+  id             String         @id @default(cuid())
+  organizationId String
+  gateway        PaymentGateway
+  externalId     String
+  planPurchased  PlanType
+  billingCycle   BillingCycle
+  amountCents    Int
+  paymentMethod  PaymentMethod
+  status         PaymentStatus  @default(PENDING)
+  pixQrCode      String?
+  pixCopyPaste   String?
+  paidAt         DateTime?
+  createdAt      DateTime       @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([gateway, externalId])
+  @@index([organizationId])
+}
+
+model Store {
+  id             String  @id @default(cuid())
+  organizationId String
+  name           String
+  logoUrl        String?
+  city           String  @default("")
+  state          String  @default("")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  departments  Department[]
+
+  @@index([organizationId])
+}
+
+model Department {
+  id                String     @id @default(cuid())
+  organizationId    String
+  storeId           String?
+  name              String
+  defaultSundayRule SundayRule @default(ONE_IN_3)
+  weeklyHoursTarget Int        @default(42)
+  minBreakMinutes   Int        @default(60) // 30 quando a convenção coletiva reduz o intervalo (art. 611-A III)
+  sundayCycleOffset Int        @default(0) // alinha o rodízio de domingo de uma loja que já estava no meio do ciclo
+
+  organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  store        Store?             @relation(fields: [storeId], references: [id], onDelete: SetNull)
+  employees    Employee[]
+  shifts       ShiftTemplate[]
+  coverage     CoverageRule[]
+  cycles       ScheduleCycle[]
+  swaps        ShiftSwapRequest[]
+  auditLogs    AuditLog[]
+  users        UserAccount[]      @relation("UserDepartments")
+
+  @@index([organizationId])
+  @@index([storeId])
+}
+
+model UserAccount {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  email          String   @unique
+  passwordHash   String
+  phone          String?
+  role           UserRole @default(OWNER)
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  departments  Department[] @relation("UserDepartments")
+  auditLogs    AuditLog[]
+
+  @@index([organizationId])
+}
+
+model ShiftTemplate {
+  id                   String  @id @default(cuid())
+  organizationId       String
+  departmentId         String
+  name                 String
+  code                 String
+  startTime            String
+  endTime              String
+  breakDurationMinutes Int     @default(60)
+  color                String  @default("#2563EB")
+  isNightShift         Boolean @default(false)
+
+  department  Department        @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  assignments DailyAssignment[]
+
+  @@index([organizationId])
+  @@index([departmentId])
+}
+
+model CoverageRule {
+  id             String    @id @default(cuid())
+  organizationId String
+  departmentId   String
+  dayOfWeek      DayOfWeek
+  minTotalStaff  Int
+  requiredTags   Json      @default("[]")
+  peakHours      Json      @default("[]")
+
+  department Department @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+
+  @@unique([departmentId, dayOfWeek])
+  @@index([organizationId])
+}
+
+model Employee {
+  id               String         @id @default(cuid())
+  organizationId   String
+  departmentId     String
+  name             String
+  phone            String?
+  accessToken      String         @unique
+  roleTitle        String         @default("")
+  tags             String[]
+  sundayGroup      Int            @default(1)
+  customSundayRule SundayRule?
+  fixedConstraints Json?
+  status           EmployeeStatus @default(ACTIVE)
+  createdAt        DateTime       @default(now())
+
+  department  Department         @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  absences    Absence[]
+  assignments DailyAssignment[]
+  swapsOut    ShiftSwapRequest[] @relation("SwapRequester")
+  swapsIn     ShiftSwapRequest[] @relation("SwapTarget")
+
+  @@index([organizationId])
+  @@index([departmentId])
+}
+
+model Absence {
+  id             String      @id @default(cuid())
+  organizationId String
+  employeeId     String
+  type           AbsenceType
+  startDate      String
+  endDate        String
+  notes          String?
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([employeeId])
+}
+
+model ScheduleCycle {
+  id             String         @id @default(cuid())
+  organizationId String
+  departmentId   String
+  weekStartDate  String
+  cycleWeek      Int
+  status         ScheduleStatus @default(DRAFT)
+  publishedAt    DateTime?
+  publishedBy    String?
+
+  department  Department        @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  assignments DailyAssignment[]
+
+  @@unique([departmentId, weekStartDate])
+  @@index([organizationId])
+}
+
+model DailyAssignment {
+  id              String         @id @default(cuid())
+  organizationId  String
+  scheduleCycleId String
+  employeeId      String
+  date            String
+  dayOfWeek       DayOfWeek
+  type            AssignmentType
+  shiftId         String?
+  isPinned        Boolean        @default(false)
+
+  cycle    ScheduleCycle  @relation(fields: [scheduleCycleId], references: [id], onDelete: Cascade)
+  employee Employee       @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  shift    ShiftTemplate? @relation(fields: [shiftId], references: [id], onDelete: SetNull)
+
+  @@unique([employeeId, date])
+  @@index([organizationId])
+  @@index([scheduleCycleId])
+}
+
+model ShiftSwapRequest {
+  id                  String     @id @default(cuid())
+  organizationId      String
+  departmentId        String
+  requesterId         String
+  targetEmployeeId    String
+  date                String
+  requesterShiftId    String?
+  targetShiftId       String?
+  cltValidationPassed Boolean    @default(false)
+  cltWarnings         String[]
+  status              SwapStatus @default(PENDING_PEER)
+  reviewedBy          String?
+  createdAt           DateTime   @default(now())
+
+  department Department @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  requester  Employee   @relation("SwapRequester", fields: [requesterId], references: [id], onDelete: Cascade)
+  target     Employee   @relation("SwapTarget", fields: [targetEmployeeId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+}
+
+model AuditLog {
+  id             String   @id @default(cuid())
+  organizationId String
+  departmentId   String?
+  userId         String?
+  action         String
+  details        String
+  ip             String?
+  timestamp      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  department   Department?  @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+  user         UserAccount? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, timestamp])
+}
