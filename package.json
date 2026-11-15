@@ -1,0 +1,20 @@
+{
+  "name": "planilha-escala-5x2",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "shared",
+    "web",
+    "api"
+  ],
+  "scripts": {
+    "dev": "concurrently -n web,api -c cyan,magenta \"npm run dev -w web\" \"npm run dev -w api\"",
+    "test": "vitest run",
+    "build": "npm run build -w web"
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.7",
+    "vitest": "^5.1.0"
+  }
+}
