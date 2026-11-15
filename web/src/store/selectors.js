@@ -29,7 +29,12 @@ export function selectActiveDepartment(state) {
   return state.departments.find((d) => d.id === state.activeDepartmentId) ?? null;
 }
 
-const filterByDepartment = memoizeLast((list, departmentId) => list.filter((x) => x.departmentId === departmentId));
+// Um cache por lista: se as três compartilhassem o mesmo memoizeLast, usar dois seletores no
+// mesmo componente invalidaria o cache do outro a cada leitura (loop de renderização).
+const byDepartment = () => memoizeLast((list, departmentId) => list.filter((x) => x.departmentId === departmentId));
+const employeesOfDepartment = byDepartment();
+const shiftsOfDepartment = byDepartment();
+const coverageRulesOfDepartment = byDepartment();
 const filterActive = memoizeLast((list) => list.filter((e) => e.status === 'ACTIVE'));
 
 /**
@@ -39,7 +44,7 @@ const filterActive = memoizeLast((list) => list.filter((e) => e.status === 'ACTI
  * @returns {any[]}
  */
 export function selectDepartmentEmployees(state, { activeOnly = false } = {}) {
-  const all = filterByDepartment(state.employees, state.activeDepartmentId);
+  const all = employeesOfDepartment(state.employees, state.activeDepartmentId);
   return activeOnly ? filterActive(all) : all;
 }
 
@@ -50,12 +55,12 @@ export function selectActiveEmployees(state) {
 
 /** @param {any} state @returns {any[]} turnos do setor ativo */
 export function selectDepartmentShifts(state) {
-  return filterByDepartment(state.shifts, state.activeDepartmentId);
+  return shiftsOfDepartment(state.shifts, state.activeDepartmentId);
 }
 
 /** @param {any} state @returns {any[]} regras de cobertura do setor ativo */
 export function selectDepartmentCoverageRules(state) {
-  return filterByDepartment(state.coverageRules, state.activeDepartmentId);
+  return coverageRulesOfDepartment(state.coverageRules, state.activeDepartmentId);
 }
 
 const absencesOf = memoizeLast((absences, employees, departmentId) => {

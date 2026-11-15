@@ -65,6 +65,8 @@
  * @property {string} name - Ex: "Açougue", "Frente de Caixa", "Hortifruti"
  * @property {'1_IN_3' | '1_IN_2' | 'CUSTOM'} defaultSundayRule
  * @property {number} weeklyHoursTarget - Ex: 42 (EC 141/2026) ou 40
+ * @property {number} [minBreakMinutes] - Intervalo mínimo acima de 6h (60, ou 30 por convenção coletiva)
+ * @property {number} [sundayCycleOffset] - Alinha o rodízio de domingo de uma loja já no meio do ciclo (0, 1 ou 2)
  */
 
 /**

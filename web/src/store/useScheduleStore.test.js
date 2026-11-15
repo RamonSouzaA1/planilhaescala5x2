@@ -6,6 +6,8 @@ import {
   selectWeekAssignments,
   selectWeekValidation,
   selectDepartmentEmployees,
+  selectDepartmentShifts,
+  selectDepartmentCoverageRules,
   selectActiveDepartment,
 } from './selectors.js';
 
@@ -25,6 +27,19 @@ beforeEach(() => {
   localStorage.clear();
   store().resetAll();
   store().goToWeek(WEEK);
+});
+
+describe('seletores', () => {
+  it('seletores de lista alternados mantêm referências estáveis (sem loop de renderização)', () => {
+    seed(3);
+    const s = store();
+    const employees = selectDepartmentEmployees(s);
+    const shifts = selectDepartmentShifts(s);
+    const rules = selectDepartmentCoverageRules(s);
+    expect(selectDepartmentEmployees(s)).toBe(employees);
+    expect(selectDepartmentShifts(s)).toBe(shifts);
+    expect(selectDepartmentCoverageRules(s)).toBe(rules);
+  });
 });
 
 describe('desfazer/refazer', () => {
