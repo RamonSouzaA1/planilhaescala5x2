@@ -390,6 +390,7 @@ export const useScheduleStore = create()(
             coverageRules: state.coverageRules.filter((x) => x.departmentId === department.id),
             absences: state.absences.filter((a) => employees.some((e) => e.id === a.employeeId)),
             previousAssignments: mine.filter((a) => inWeek(a.date, prevStart)),
+            nextAssignments: mine.filter((a) => inWeek(a.date, addDays(weekStart, 7))),
             existingAssignments: mine.filter((a) => inWeek(a.date, weekStart) && a.isPinned),
             department,
             scheduleCycleId: `${department.id}_${weekStart}`,

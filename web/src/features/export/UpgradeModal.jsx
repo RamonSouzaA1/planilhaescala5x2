@@ -2,8 +2,6 @@ import { useState } from 'react';
 import { Check, Clock, Crown, Download } from 'lucide-react';
 import { Dialog, btnPrimary, btnSecondary, cardCls } from './Dialog.jsx';
 
-export const UPGRADE_INTEREST_KEY = 'planilha-escala-5x2:upgrade-interest';
-
 const PLANS = [
   {
     id: 'LEADER_MONTHLY',
@@ -34,98 +32,36 @@ const PLANS = [
   },
 ];
 
-function saveInterest(plan, phone) {
-  try {
-    localStorage.setItem(UPGRADE_INTEREST_KEY, JSON.stringify({ plan, phone, savedAt: new Date().toISOString() }));
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 /**
- * Modal de Desbloqueio Imediato (spec 6.3). O checkout Pix ainda não existe: os botões
- * coletam o WhatsApp de quem quer ser avisado. Nenhuma cobrança é feita.
+ * Modal de Desbloqueio Imediato (spec 6.3). O checkout Pix ainda não existe: escolher um plano
+ * só informa isso com honestidade. Nenhum dado é coletado e nenhuma cobrança é feita.
  * @param {{ employeeCount: number, hasRedAlerts?: boolean, reason?: string, onClose: () => void }} props
  */
 export function UpgradeModal({ employeeCount, hasRedAlerts = false, reason, onClose }) {
   const [chosen, setChosen] = useState(null);
-  const [phone, setPhone] = useState('');
-  const [error, setError] = useState('');
-  const [saved, setSaved] = useState(false);
 
   const intro = hasRedAlerts
     ? `Sua escala de ${employeeCount} funcionários está pronta.`
     : `Sua escala de ${employeeCount} funcionários está pronta e 100% dentro da CLT.`;
 
-  function submit(event) {
-    event.preventDefault();
-    const digits = phone.replace(/\D/g, '');
-    if (digits.length < 10) {
-      setError('Informe o WhatsApp com DDD, por exemplo (11) 91234-5678.');
-      return;
-    }
-    if (!saveInterest(chosen.id, phone.trim())) {
-      setError('Não foi possível salvar neste navegador. Tente novamente.');
-      return;
-    }
-    setError('');
-    setSaved(true);
-  }
-
   if (chosen) {
     return (
-      <Dialog title="Pagamento via Pix chega em breve" onClose={onClose}>
+      // key: remonta o diálogo para o foco ir ao botão principal (o botão clicado some da tela).
+      <Dialog key="pix-unavailable" title="Pagamento via Pix indisponível" onClose={onClose}>
         <p className="text-slate-700">
-          Pagamento via Pix chega em breve — deixe seu WhatsApp para ser avisado. Nenhuma cobrança foi feita.
+          Pagamento via Pix ainda não está disponível. Obrigado pelo interesse! Nenhuma cobrança foi feita.
         </p>
         <p className="mt-1 text-xs text-slate-600">
-          Interesse: <strong>{chosen.name}</strong> ({chosen.price})
+          Plano escolhido: <strong>{chosen.name}</strong> ({chosen.price})
         </p>
-        {saved ? (
-          <p role="status" className="mt-3 flex items-center gap-1.5 rounded-lg bg-emerald-50 px-3 py-2 font-medium text-emerald-800">
-            <Check size={16} aria-hidden="true" /> Anotado! Avisaremos você no WhatsApp quando o Pix estiver disponível.
-          </p>
-        ) : (
-          <form onSubmit={submit} className="mt-3" noValidate>
-            <label htmlFor="upgrade-phone" className="mb-1 block text-xs font-medium text-slate-700">
-              Seu WhatsApp
-            </label>
-            <input
-              id="upgrade-phone"
-              data-autofocus
-              type="tel"
-              inputMode="tel"
-              autoComplete="tel"
-              value={phone}
-              onChange={(e) => setPhone(e.target.value)}
-              placeholder="(11) 91234-5678"
-              aria-invalid={error ? 'true' : undefined}
-              aria-describedby={error ? 'upgrade-phone-error' : undefined}
-              className="w-full rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-sm text-slate-900 focus:border-emerald-600 focus:outline-none focus:ring-2 focus:ring-emerald-600/30"
-            />
-            {error && (
-              <p id="upgrade-phone-error" role="alert" className="mt-1 text-xs font-medium text-rose-700">
-                {error}
-              </p>
-            )}
-            <div className="mt-3 flex flex-wrap justify-end gap-2">
-              <button type="button" className={btnSecondary} onClick={() => setChosen(null)}>
-                Voltar
-              </button>
-              <button type="submit" className={btnPrimary}>
-                Avisar-me
-              </button>
-            </div>
-          </form>
-        )}
-        {saved && (
-          <div className="mt-3 flex justify-end">
-            <button type="button" className={btnSecondary} onClick={onClose}>
-              Fechar
-            </button>
-          </div>
-        )}
+        <div className="mt-3 flex flex-wrap justify-end gap-2">
+          <button type="button" className={btnSecondary} onClick={() => setChosen(null)}>
+            Voltar
+          </button>
+          <button type="button" data-autofocus className={btnPrimary} onClick={onClose}>
+            Entendi
+          </button>
+        </div>
       </Dialog>
     );
   }

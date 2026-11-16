@@ -2,7 +2,8 @@ import { useState } from 'react';
 import { AlertTriangle, Check, Clock, Moon, Pencil, Plus, Trash2, X } from 'lucide-react';
 import { useScheduleStore } from '../../store/useScheduleStore.js';
 import { selectActiveDepartment, selectDepartmentShifts } from '../../store/selectors.js';
-import { analyzeShift, computeIsNight, formatHours, formatMinutes } from './shiftMetrics.js';
+import { MAX_BREAK_MINUTES } from '@escala/shared/utils/cltValidator.js';
+import { analyzeShift, computeIsNight, formatHours, formatMinutes, getClockMinutes } from './shiftMetrics.js';
 import { btnDanger, btnGhost, btnIcon, btnPrimary, card, errorCls, hintCls, input, labelCls } from './ui.js';
 
 /** Paleta de 8 cores com contraste AA contra texto branco. */
@@ -45,7 +46,13 @@ function validate(draft, shifts, editingId) {
   if (!draft.endTime) errors.endTime = 'Informe o fim.';
   if (draft.startTime && draft.startTime === draft.endTime) errors.endTime = 'Início e fim não podem ser iguais.';
   const brk = draft.breakDurationMinutes;
+  const clockMinutes = getClockMinutes(draft.startTime, draft.endTime);
   if (brk === '' || !Number.isFinite(Number(brk)) || Number(brk) < 0) errors.breakDurationMinutes = 'O intervalo deve ser 0 ou mais minutos.';
+  else if (Number(brk) > MAX_BREAK_MINUTES) {
+    errors.breakDurationMinutes = `O intervalo pode ter no máximo ${MAX_BREAK_MINUTES} min (art. 71 da CLT).`;
+  } else if (clockMinutes !== null && Number(brk) >= clockMinutes) {
+    errors.breakDurationMinutes = `O intervalo deve ser menor que a duração do turno (${formatMinutes(clockMinutes)}).`;
+  }
   if (!HEX.test(draft.color)) errors.color = 'Use uma cor hexadecimal, como #1D4ED8.';
   return errors;
 }
@@ -281,7 +288,7 @@ export function ShiftsEditor() {
             <label htmlFor="shift-break" className={labelCls}>
               Intervalo (min)
             </label>
-            <input id="shift-break" type="number" min="0" step="5" className={input} value={draft.breakDurationMinutes} onChange={set('breakDurationMinutes')} {...fieldProps('breakDurationMinutes')} />
+            <input id="shift-break" type="number" min="0" max={MAX_BREAK_MINUTES} step="5" className={input} value={draft.breakDurationMinutes} onChange={set('breakDurationMinutes')} {...fieldProps('breakDurationMinutes')} />
             {fieldError('breakDurationMinutes')}
           </div>
         </div>

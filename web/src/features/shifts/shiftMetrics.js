@@ -2,6 +2,7 @@ import {
   getRequiredBreakMinutes,
   getShiftLegalMinutes,
   getShiftNightMinutes,
+  getShiftWindow,
   getShiftWorkMinutes,
 } from '@escala/shared/utils/cltValidator.js';
 
@@ -22,6 +23,18 @@ export function formatMinutes(total) {
 /** Horas decimais -> "42h" / "41,5h". */
 export function formatHours(hours) {
   return `${String(Math.round(hours * 100) / 100).replace('.', ',')}h`;
+}
+
+/**
+ * Duração de relógio do turno, da entrada à saída (vira a meia-noite quando o fim é menor).
+ * @param {string} startTime
+ * @param {string} endTime
+ * @returns {number | null} null se algum horário for inválido ou se início e fim forem iguais
+ */
+export function getClockMinutes(startTime, endTime) {
+  if (!isValidTime(startTime) || !isValidTime(endTime) || startTime === endTime) return null;
+  const { start, end } = getShiftWindow({ startTime, endTime });
+  return end - start;
 }
 
 /** true se houver minutos entre 22h e 05h. */

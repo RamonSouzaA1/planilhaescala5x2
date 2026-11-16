@@ -4,8 +4,10 @@
  *
  * Vermelho (infração):
  *   - interjornada < 11h (art. 66 CLT) e descanso semanal < 35h (Súmula 110 TST: 24h + 11h);
- *   - intrajornada insuficiente (art. 71 CLT) e jornada diária > 10h (art. 59 CLT);
+ *   - intrajornada insuficiente ou acima de 2h, presença no turno acima de 12h (art. 71 CLT)
+ *     e jornada diária > 10h (art. 59 CLT);
  *   - mais de 6 dias seguidos (OJ 410 SDI-1/TST);
+ *   - descanso e sequência de dias também na virada para a semana seguinte, quando informada;
  *   - semana fora do 5x2 e carga semanal acima da meta do setor (EC 141/2026),
  *     contando a hora noturna reduzida (art. 73 CLT, 22h–05h);
  *   - escala em dia de férias/atestado.
@@ -38,6 +40,10 @@ export const MIN_INTERJORNADA_MINUTES = 11 * 60;
 export const MIN_WEEKLY_REST_MINUTES = 35 * 60;
 export const MAX_DAILY_WORK_MINUTES = 10 * 60;
 export const MAX_CONSECUTIVE_WORK_DAYS = 6;
+/** Intervalo intrajornada máximo sem acordo escrito ou convenção (art. 71 caput CLT). */
+export const MAX_BREAK_MINUTES = 120;
+/** Presença máxima no turno, da entrada à saída (10h de jornada + 2h de intervalo). */
+export const MAX_SHIFT_PRESENCE_MINUTES = 12 * 60;
 export const WORK_DAYS_PER_WEEK = 5;
 export const OFF_DAYS_PER_WEEK = 2;
 
@@ -257,6 +263,9 @@ export function computeHourlyCoverage({ assignments, shifts, date }) {
  * @param {any[]} input.shifts
  * @param {any[]} input.assignments - DailyAssignment da semana
  * @param {any[]} [input.previousAssignments] - DailyAssignment da semana anterior (virada de semana)
+ * @param {any[]} [input.nextAssignments] - DailyAssignment da semana seguinte já gravada. Os pares que
+ *   cruzam do domingo da semana validada para a semana seguinte (interjornada, descanso de 35h e
+ *   sequência de dias) são apontados na última célula da semana validada.
  * @param {any[]} [input.absences]
  * @param {any[]} [input.coverageRules]
  * @param {{ defaultSundayRule?: string, weeklyHoursTarget?: number, minBreakMinutes?: number, sundayCycleOffset?: number }} [input.department]
@@ -269,6 +278,7 @@ export function validateSchedule({
   shifts = [],
   assignments = [],
   previousAssignments = [],
+  nextAssignments = [],
   absences = [],
   coverageRules = [],
   department = {},
@@ -277,13 +287,19 @@ export function validateSchedule({
 
   const dates = getWeekDates(weekStartDate);
   const weekDateSet = new Set(dates);
-  const historyDates = getWeekDates(addDays(weekStartDate, -7)).concat(dates);
+  const nextDates = getWeekDates(addDays(weekStartDate, 7));
+  const nextDateSet = new Set(nextDates);
+  // Semana anterior + semana validada + semana seguinte (vazia quando não informada).
+  const timelineDates = getWeekDates(addDays(weekStartDate, -7)).concat(dates, nextDates);
   const shiftById = new Map(shifts.map((s) => [s.id, s]));
   for (const shift of shifts) getShiftWindow(shift); // falha cedo em horário inválido
   const activeEmployees = employees.filter((e) => e.status !== 'INACTIVE');
   const activeIds = new Set(activeEmployees.map((e) => e.id));
   const currentAssignments = normalizeAssignments(assignments).filter((a) => activeIds.has(a.employeeId));
   const pastAssignments = normalizeAssignments(previousAssignments).filter((a) => activeIds.has(a.employeeId));
+  const futureAssignments = normalizeAssignments(nextAssignments).filter(
+    (a) => activeIds.has(a.employeeId) && nextDateSet.has(a.date),
+  );
 
   const target = Number(department?.weeklyHoursTarget);
   const hasHoursTarget = Number.isFinite(target) && target > 0;
@@ -292,7 +308,7 @@ export function validateSchedule({
 
   /** @type {Map<string, Map<string, any>>} colaborador → data → atribuição */
   const cellsByEmployee = new Map();
-  for (const a of [...pastAssignments, ...currentAssignments]) {
+  for (const a of [...pastAssignments, ...currentAssignments, ...futureAssignments]) {
     if (!cellsByEmployee.has(a.employeeId)) cellsByEmployee.set(a.employeeId, new Map());
     cellsByEmployee.get(a.employeeId).set(a.date, a);
   }
@@ -341,17 +357,20 @@ export function validateSchedule({
       });
     }
 
-    // Mais de 6 dias seguidos, considerando a semana anterior (OJ 410 SDI-1/TST).
+    // Mais de 6 dias seguidos, considerando a semana anterior e a seguinte (OJ 410 SDI-1/TST).
+    // Sequência que só estoura na semana seguinte é apontada no domingo da semana validada.
+    const lastDate = dates[6];
     let streak = 0;
     let reported = false;
-    for (const date of historyDates) {
+    for (const date of timelineDates) {
       if (!isWork(date)) {
         streak = 0;
         reported = false;
         continue;
       }
       streak += 1;
-      if (streak > MAX_CONSECUTIVE_WORK_DAYS && !reported && weekDateSet.has(date)) {
+      if (streak <= MAX_CONSECUTIVE_WORK_DAYS || reported) continue;
+      if (weekDateSet.has(date)) {
         reported = true;
         push({
           code: ISSUE_CODES.CONSECUTIVE_DAYS,
@@ -361,38 +380,65 @@ export function validateSchedule({
           message: `${employee.name}: ${streak}º dia seguido de trabalho em ${formatDateBR(date)} (máximo 6, OJ 410 TST).`,
           details: { consecutiveDays: streak },
         });
+      } else if (nextDateSet.has(date) && isWork(lastDate)) {
+        // A sequência é contínua até aqui, então o domingo da semana validada faz parte dela.
+        reported = true;
+        push({
+          code: ISSUE_CODES.CONSECUTIVE_DAYS,
+          severity: SEVERITY.RED,
+          employeeId: employee.id,
+          date: lastDate,
+          message: `${employee.name}: com a semana seguinte, a sequência a partir de ${formatDateBR(lastDate)} chega ao ${streak}º dia seguido em ${formatDateBR(date)} (máximo 6, OJ 410 TST).`,
+          details: { consecutiveDays: streak, nextWeekDate: date },
+        });
       }
     }
 
     // Descanso entre jornadas: 11h entre dias seguidos (art. 66 CLT) e 35h quando há
     // folga no meio (Súmula 110 TST: 24h de repouso semanal + 11h de interjornada).
+    // O par que cruza para a semana seguinte é apontado na célula da semana validada.
     let previous = null;
-    for (const date of historyDates) {
+    for (const date of timelineDates) {
       const cell = cells.get(date);
       if (cell?.type !== 'WORK' || !shiftById.has(cell.shiftId)) continue;
       const window = getShiftWindow(shiftById.get(cell.shiftId));
       const base = diffDays(weekStartDate, date) * 1440;
       const current = { date, start: base + window.start, end: base + window.end };
-      if (previous && weekDateSet.has(date)) {
+      const crossesIntoNextWeek = Boolean(previous) && nextDateSet.has(date) && weekDateSet.has(previous.date);
+      if (previous && (weekDateSet.has(date) || crossesIntoNextWeek)) {
         const restMinutes = current.start - previous.end;
         const between = [];
         for (let d = addDays(previous.date, 1); d < date; d = addDays(d, 1)) between.push(d);
         const hasDayOff = between.some((d) => !cells.has(d) || cells.get(d).type === 'OFF');
         const required = hasDayOff ? MIN_WEEKLY_REST_MINUTES : MIN_INTERJORNADA_MINUTES;
         if (restMinutes < required) {
-          const message =
-            restMinutes < 0
-              ? `${employee.name}: o turno de ${formatDateBR(date)} começa antes do fim do turno anterior.`
-              : hasDayOff
-                ? `${employee.name}: descanso semanal de ${formatDuration(restMinutes)} antes de ${formatDateBR(date)} (mínimo 35h, Súmula 110 TST).`
-                : `${employee.name}: descanso de ${formatDuration(restMinutes)} antes do turno de ${formatDateBR(date)} (mínimo 11h).`;
+          const prevBR = formatDateBR(previous.date);
+          const dateBR = formatDateBR(date);
+          let message;
+          if (crossesIntoNextWeek) {
+            message =
+              restMinutes < 0
+                ? `${employee.name}: o turno de ${dateBR} (semana seguinte) começa antes do fim do turno de ${prevBR}.`
+                : hasDayOff
+                  ? `${employee.name}: descanso semanal de ${formatDuration(restMinutes)} entre ${prevBR} e o turno de ${dateBR} na semana seguinte (mínimo 35h, Súmula 110 TST).`
+                  : `${employee.name}: descanso de ${formatDuration(restMinutes)} entre o turno de ${prevBR} e o de ${dateBR} na semana seguinte (mínimo 11h).`;
+          } else {
+            message =
+              restMinutes < 0
+                ? `${employee.name}: o turno de ${dateBR} começa antes do fim do turno anterior.`
+                : hasDayOff
+                  ? `${employee.name}: descanso semanal de ${formatDuration(restMinutes)} antes de ${dateBR} (mínimo 35h, Súmula 110 TST).`
+                  : `${employee.name}: descanso de ${formatDuration(restMinutes)} antes do turno de ${dateBR} (mínimo 11h).`;
+          }
           push({
             code: hasDayOff ? ISSUE_CODES.WEEKLY_REST : ISSUE_CODES.INTERJORNADA,
             severity: SEVERITY.RED,
             employeeId: employee.id,
-            date,
+            date: crossesIntoNextWeek ? previous.date : date,
             message,
-            details: { restMinutes, requiredMinutes: required, previousDate: previous.date },
+            details: crossesIntoNextWeek
+              ? { restMinutes, requiredMinutes: required, previousDate: previous.date, nextWeekDate: date }
+              : { restMinutes, requiredMinutes: required, previousDate: previous.date },
           });
         }
       }
@@ -404,6 +450,8 @@ export function validateSchedule({
     for (const date of workDates) {
       const shift = shiftById.get(cells.get(date).shiftId);
       if (!shift) continue;
+      const shiftWindow = getShiftWindow(shift);
+      const presenceMinutes = shiftWindow.end - shiftWindow.start;
       const workMinutes = getShiftWorkMinutes(shift);
       const legalMinutes = getShiftLegalMinutes(shift);
       weeklyLegalMinutes += legalMinutes;
@@ -417,6 +465,26 @@ export function validateSchedule({
           date,
           message: `${employee.name}: intervalo de ${breakMinutes} min no turno de ${formatDateBR(date)} (mínimo ${requiredBreak} min, art. 71 CLT).`,
           details: { breakMinutes, requiredBreakMinutes: requiredBreak, shiftId: shift.id },
+        });
+      }
+      if (breakMinutes > MAX_BREAK_MINUTES) {
+        push({
+          code: ISSUE_CODES.INTRAJORNADA,
+          severity: SEVERITY.RED,
+          employeeId: employee.id,
+          date,
+          message: `${employee.name}: intervalo de ${breakMinutes} min no turno de ${formatDateBR(date)} (máximo ${MAX_BREAK_MINUTES} min, art. 71 CLT).`,
+          details: { breakMinutes, maxBreakMinutes: MAX_BREAK_MINUTES, shiftId: shift.id },
+        });
+      }
+      if (presenceMinutes > MAX_SHIFT_PRESENCE_MINUTES) {
+        push({
+          code: ISSUE_CODES.INTRAJORNADA,
+          severity: SEVERITY.RED,
+          employeeId: employee.id,
+          date,
+          message: `${employee.name}: ${formatDuration(presenceMinutes)} entre entrada e saída no turno de ${formatDateBR(date)} (máximo 12h com o intervalo).`,
+          details: { presenceMinutes, maxPresenceMinutes: MAX_SHIFT_PRESENCE_MINUTES, shiftId: shift.id },
         });
       }
       if (legalMinutes > MAX_DAILY_WORK_MINUTES) {

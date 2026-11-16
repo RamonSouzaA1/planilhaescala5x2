@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { canAddDepartment } from '@escala/shared/utils/planPermissions.js';
-import { AppError, found, sendOk } from '../errors.js';
+import { AppError, badRequest, found, sendOk } from '../errors.js';
 import { MANAGER_ROLES, requireRole, WRITE_ROLES } from '../middleware/auth.js';
 import {
   absenceSchema,
@@ -8,6 +8,7 @@ import {
   departmentSchema,
   employeeSchema,
   employeeUpdateSchema,
+  shiftBreakError,
   shiftSchema,
   shiftUpdateSchema,
 } from '../schemas.js';
@@ -102,6 +103,9 @@ export function resourceRoutes({ repositories, config }) {
   });
   const updateShift = async (req, res) => {
     const patch = onlyProvided(shiftUpdateSchema.parse(req.body ?? {}), req.body);
+    const current = found(await shifts.get(req.orgId, req.params.id));
+    const breakError = shiftBreakError({ ...current, ...patch });
+    if (breakError) throw badRequest(breakError, [{ path: ['breakDurationMinutes'], message: breakError }]);
     if (patch.departmentId) await ownDepartment(req.orgId, patch.departmentId);
     sendOk(res, found(await shifts.update(req.orgId, req.params.id, patch)));
   };

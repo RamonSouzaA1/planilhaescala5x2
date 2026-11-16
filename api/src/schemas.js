@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { isMonday, parseDate, formatDate } from '@escala/shared/utils/dateUtils.js';
+import { getShiftWindow, MAX_BREAK_MINUTES } from '@escala/shared/utils/cltValidator.js';
 
 /** Datas 'YYYY-MM-DD' reais (rejeita 2026-02-31). */
 export const dateString = z
@@ -54,17 +55,49 @@ export const employeeSchema = z.object({
 });
 export const employeeUpdateSchema = employeeSchema.partial();
 
-export const shiftSchema = z.object({
+const shiftBase = z.object({
   departmentId: z.string().min(1),
   name,
   code: z.string().trim().min(1).max(10),
   startTime: timeString,
   endTime: timeString,
-  breakDurationMinutes: z.number().int().min(0).max(240).default(60),
+  breakDurationMinutes: z
+    .number()
+    .int()
+    .min(0)
+    .max(MAX_BREAK_MINUTES, `O intervalo pode ter no máximo ${MAX_BREAK_MINUTES} min (art. 71 CLT).`)
+    .default(60),
   color: z.string().regex(/^#[0-9a-fA-F]{6}$/, 'Use cor hexadecimal, ex.: #2563EB.').default('#2563EB'),
   isNightShift: z.boolean().default(false),
 });
-export const shiftUpdateSchema = shiftSchema.partial();
+
+/**
+ * Mensagem de erro quando o intervalo não cabe no turno (null se cabe ou se faltam dados).
+ * A duração de relógio considera turnos que viram a meia-noite.
+ * @param {{ startTime?: string, endTime?: string, breakDurationMinutes?: number }} shift
+ * @returns {string | null}
+ */
+export function shiftBreakError({ startTime, endTime, breakDurationMinutes }) {
+  if (typeof breakDurationMinutes !== 'number') return null;
+  if (!timeString.safeParse(startTime).success || !timeString.safeParse(endTime).success) return null;
+  const { start, end } = getShiftWindow({ startTime, endTime });
+  const clockMinutes = end - start;
+  if (breakDurationMinutes < clockMinutes) return null;
+  return `O intervalo (${breakDurationMinutes} min) deve ser menor que a duração do turno (${clockMinutes} min).`;
+}
+
+/** @param {any} value @param {import('zod').RefinementCtx} ctx */
+const breakFitsShift = (value, ctx) => {
+  const message = shiftBreakError(value);
+  if (message) ctx.addIssue({ code: 'custom', message, path: ['breakDurationMinutes'] });
+};
+
+export const shiftSchema = shiftBase.superRefine(breakFitsShift);
+/**
+ * PATCH: sem refinamento aqui, porque o default do intervalo apareceria mesmo sem ser enviado.
+ * A rota mescla o patch com o turno gravado e chama `shiftBreakError`.
+ */
+export const shiftUpdateSchema = shiftBase.partial();
 
 const absenceBase = z.object({
   employeeId: z.string().min(1),

@@ -17,12 +17,13 @@ export function scheduleRoutes({ repositories }) {
 
   /** Carrega tudo que o validador e o gerador precisam para a semana (tudo da organização do token). */
   async function loadContext(orgId, department, weekStartDate) {
-    const [team, shiftList, rules, current, previous] = await Promise.all([
+    const [team, shiftList, rules, current, previous, next] = await Promise.all([
       employees.list(orgId, { departmentId: department.id }),
       shifts.list(orgId, { departmentId: department.id }),
       coverageRules.list(orgId, { departmentId: department.id }),
       schedules.listWeek(orgId, department.id, weekStartDate),
       schedules.listWeek(orgId, department.id, addDays(weekStartDate, -7)),
+      schedules.listWeek(orgId, department.id, addDays(weekStartDate, 7)),
     ]);
     const absenceList = team.length ? await absences.list(orgId, { employeeId: { in: team.map((e) => e.id) } }) : [];
     return {
@@ -31,6 +32,7 @@ export function scheduleRoutes({ repositories }) {
       coverageRules: rules,
       assignments: current,
       previousAssignments: previous,
+      nextAssignments: next,
       absences: absenceList,
       department: {
         defaultSundayRule: department.defaultSundayRule,
@@ -48,6 +50,7 @@ export function scheduleRoutes({ repositories }) {
       shifts: ctx.shifts,
       assignments,
       previousAssignments: ctx.previousAssignments,
+      nextAssignments: ctx.nextAssignments,
       absences: ctx.absences,
       coverageRules: ctx.coverageRules,
       department: ctx.department,
@@ -132,6 +135,7 @@ export function scheduleRoutes({ repositories }) {
       employees: ctx.team,
       shifts: ctx.shifts,
       previousAssignments: ctx.previousAssignments,
+      nextAssignments: ctx.nextAssignments,
       existingAssignments: ctx.assignments,
       absences: ctx.absences,
       coverageRules: ctx.coverageRules,

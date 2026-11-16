@@ -510,3 +510,66 @@ describe('repositório Prisma (escopo por organização, sem banco)', () => {
     expect(calls.find((c) => c.method === 'updateMany').args.data).not.toHaveProperty('organizationId');
   });
 });
+
+describe('intervalo intrajornada dos turnos (F10)', () => {
+  it('POST rejeita intervalo acima de 120 min e intervalo que não cabe no turno (400)', async () => {
+    const { token } = await register();
+    const dept = (await post('/api/departments', token, { name: 'Açougue' })).body.data;
+    const base = { departmentId: dept.id, name: 'Turno', code: 'TX' };
+
+    const tooLong = await post('/api/shifts', token, { ...base, startTime: '07:00', endTime: '19:00', breakDurationMinutes: 150 });
+    expect(tooLong.status).toBe(400);
+    expect(tooLong.body.error.code).toBe('VALIDATION_ERROR');
+
+    const notFitting = await post('/api/shifts', token, { ...base, startTime: '07:00', endTime: '08:00', breakDurationMinutes: 60 });
+    expect(notFitting.status).toBe(400);
+    expect(JSON.stringify(notFitting.body.error)).toContain('menor que a duração do turno');
+
+    const overnight = await post('/api/shifts', token, { ...base, startTime: '22:00', endTime: '06:00', breakDurationMinutes: 60 });
+    expect(overnight.status).toBe(201);
+    const maxBreak = await post('/api/shifts', token, { ...base, code: 'TY', startTime: '07:00', endTime: '17:00', breakDurationMinutes: 120 });
+    expect(maxBreak.status).toBe(201);
+  });
+
+  it('PATCH confere o intervalo contra o turno gravado', async () => {
+    const { token } = await register();
+    const { shifts } = await seedDepartment(token, 1);
+    const url = `/api/shifts/${shifts[0].id}`; // 07:00–16:24, intervalo padrão de 60 min
+    const patch = (body) => request(app).patch(url).set(auth(token)).send(body);
+
+    expect((await patch({ endTime: '07:30' })).status).toBe(400); // 30 min de turno com 60 de intervalo
+    expect((await patch({ breakDurationMinutes: 121 })).status).toBe(400);
+    const ok = await patch({ breakDurationMinutes: 90 });
+    expect(ok.status).toBe(200);
+    expect(ok.body.data.breakDurationMinutes).toBe(90);
+    expect((await request(app).get(url).set(auth(token))).body.data.endTime).toBe('16:24');
+  });
+});
+
+describe('virada para a semana seguinte (F10)', () => {
+  it('GET da semana W aponta interjornada com a segunda de W+1 já gravada', async () => {
+    const { token } = await register();
+    const { dept, shifts, team } = await seedDepartment(token, 1);
+    const [t1, , t3] = shifts;
+    const nextWeek = '2026-11-23';
+    const cells = (start, codes) =>
+      codes.map((code, i) => {
+        const date = new Date(`${start}T00:00:00Z`);
+        date.setUTCDate(date.getUTCDate() + i);
+        const shift = code === 'T1' ? t1 : code === 'T3' ? t3 : null;
+        return { employeeId: team[0].id, date: date.toISOString().slice(0, 10), type: shift ? 'WORK' : 'OFF', shiftId: shift?.id };
+      });
+    const put = (weekStartDate, assignments) =>
+      request(app).put('/api/schedules').set(auth(token)).send({ departmentId: dept.id, weekStartDate, assignments });
+
+    expect((await put(WEEK, cells(WEEK, ['O', 'O', 'T3', 'T3', 'T3', 'T3', 'T3']))).status).toBe(200);
+    const before = await request(app).get(`/api/schedules?departmentId=${dept.id}&weekStart=${WEEK}`).set(auth(token));
+    expect(before.body.data.validation.issues.map((i) => i.code)).not.toContain('INTERJORNADA');
+
+    expect((await put(nextWeek, cells(nextWeek, ['T1', 'T1', 'O', 'O', 'T1', 'T1', 'T1']))).status).toBe(200);
+    const after = await request(app).get(`/api/schedules?departmentId=${dept.id}&weekStart=${WEEK}`).set(auth(token));
+    const issue = after.body.data.validation.issues.find((i) => i.code === 'INTERJORNADA');
+    expect(issue).toMatchObject({ severity: 'RED', date: '2026-11-22', employeeId: team[0].id });
+    expect(issue.details).toMatchObject({ restMinutes: 9 * 60, nextWeekDate: nextWeek });
+  });
+});

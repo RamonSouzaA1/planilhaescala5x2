@@ -114,6 +114,7 @@ const validate = memoizeLast((department, employees, shifts, rules, absences, as
   if (!department) return null;
   const end = addDays(weekStart, 6);
   const prevStart = addDays(weekStart, -7);
+  const nextEnd = addDays(weekStart, 13);
   const mine = assignments.filter((a) => a.departmentId === department.id);
   return validateSchedule({
     weekStartDate: weekStart,
@@ -123,6 +124,7 @@ const validate = memoizeLast((department, employees, shifts, rules, absences, as
     absences,
     assignments: mine.filter((a) => a.date >= weekStart && a.date <= end),
     previousAssignments: mine.filter((a) => a.date >= prevStart && a.date < weekStart),
+    nextAssignments: mine.filter((a) => a.date > end && a.date <= nextEnd),
     department,
   });
 });

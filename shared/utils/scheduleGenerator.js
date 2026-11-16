@@ -2,7 +2,8 @@
  * Motor gerador 5x2 (spec, módulo 3). Algoritmo determinístico em 4 etapas:
  *   1. Travas e ausências: células isPinned, férias/atestados e dias indisponíveis são fixados.
  *   2. Domingos: aplica o rodízio (1 em 3 / 1 em 2) e considera a sequência de dias
- *      trabalhados no fim da semana anterior (OJ 410 SDI-1/TST: no máximo 6 seguidos).
+ *      trabalhados no fim da semana anterior e no início da semana seguinte já gravada
+ *      (OJ 410 SDI-1/TST: no máximo 6 seguidos).
  *   3. Folgas: escolhe as folgas restantes por custo — preferência de segunda a quarta,
  *      proteção de sexta a domingo e dos dias de pico, espalhamento entre os dias e
  *      penalidades para furo de cobertura mínima e de tags obrigatórias.
@@ -54,6 +55,24 @@ export function getTrailingWorkStreak(previousAssignments, employeeId, weekStart
   return streak;
 }
 
+/**
+ * Quantos dias seguidos o colaborador já tem de trabalho no início da semana seguinte.
+ * @param {any[]} nextAssignments
+ * @param {string} employeeId
+ * @param {string} weekStartDate - segunda-feira da semana gerada
+ * @returns {number}
+ */
+export function getLeadingWorkStreak(nextAssignments, employeeId, weekStartDate) {
+  const workDates = new Set(
+    nextAssignments
+      .filter((a) => a.employeeId === employeeId && a.type === 'WORK')
+      .map((a) => toDateKey(a.date)),
+  );
+  let streak = 0;
+  while (streak < 7 && workDates.has(addDays(weekStartDate, 7 + streak))) streak += 1;
+  return streak;
+}
+
 /** Todas as combinações de `k` itens de `items`, em ordem lexicográfica. */
 function combinations(items, k) {
   if (k === 0) return [[]];
@@ -71,6 +90,8 @@ function combinations(items, k) {
  * @param {any[]} input.employees
  * @param {any[]} [input.shifts]
  * @param {any[]} [input.previousAssignments] - semana anterior (virada de semana e turno-base)
+ * @param {any[]} [input.nextAssignments] - semana seguinte já gravada: tratada como travada
+ *   (descanso até o primeiro turno dela e sequência de dias na virada)
  * @param {any[]} [input.existingAssignments] - semana atual; só as isPinned são preservadas
  * @param {any[]} [input.absences]
  * @param {any[]} [input.coverageRules]
@@ -85,6 +106,7 @@ export function generateSchedule({
   employees = [],
   shifts = [],
   previousAssignments = [],
+  nextAssignments = [],
   existingAssignments = [],
   absences = [],
   coverageRules = [],
@@ -106,6 +128,10 @@ export function generateSchedule({
     existingAssignments.filter((a) => a.isPinned).map((a) => [`${a.employeeId}|${toDateKey(a.date)}`, a]),
   );
   const previous = previousAssignments.map((a) => ({ ...a, date: toDateKey(a.date) }));
+  const nextDates = getWeekDates(addDays(weekStartDate, 7));
+  const next = nextAssignments
+    .map((a) => ({ ...a, date: toDateKey(a.date) }))
+    .filter((a) => nextDates.includes(a.date));
 
   // Etapa 1 e 2: células fixas (travas, ausências, indisponibilidade, domingo do rodízio).
   const plans = active.map((employee, order) => {
@@ -152,6 +178,7 @@ export function generateSchedule({
       free,
       offNeeded: Math.max(0, Math.min(offBudget(), free.length)),
       trailing: getTrailingWorkStreak(previous, employee.id, weekStartDate),
+      leading: getLeadingWorkStreak(next, employee.id, weekStartDate),
       tags: (employee.tags ?? []).filter((t) => coverageTags.includes(t)),
       offs: [],
     };
@@ -195,7 +222,8 @@ export function generateSchedule({
       run = type === 'WORK' ? run + 1 : 0;
       if (run > MAX_CONSECUTIVE_WORK_DAYS) return true;
     }
-    return false;
+    // Sequência que continua na semana seguinte já gravada.
+    return run > 0 && plan.leading > 0 && run + plan.leading > MAX_CONSECUTIVE_WORK_DAYS;
   };
 
   const chooseOffs = (plan) => {
@@ -278,12 +306,16 @@ export function generateSchedule({
         .sort((a, b) => Math.abs(getShiftWindow(a).start - homeStart) - Math.abs(getShiftWindow(b).start - homeStart)),
     ];
 
-    // Linha do tempo de 14 dias (semana anterior + atual), índice 0 = segunda anterior.
+    // Linha do tempo de 21 dias (semana anterior + atual + seguinte), índice 0 = segunda anterior.
+    // As células da semana seguinte já estão gravadas e contam como travadas.
     const previousByDate = new Map(previous.filter((a) => a.employeeId === plan.employee.id).map((a) => [a.date, a]));
+    const nextByDate = new Map(next.filter((a) => a.employeeId === plan.employee.id).map((a) => [a.date, a]));
     const timeline = [
       ...getWeekDates(addDays(weekStartDate, -7)).map((date) => previousByDate.get(date)),
       ...plan.cells,
+      ...nextDates.map((date) => nextByDate.get(date)),
     ];
+    const NEXT_WEEK_INDEX = 14;
 
     /** Turno de trabalho mais próximo na direção `step`, com a distância e se há folga no meio. */
     const neighbour = (index, step, onlyPinned) => {
@@ -291,7 +323,7 @@ export function generateSchedule({
       for (let i = index + step; i >= 0 && i < timeline.length; i += step) {
         const cell = timeline[i];
         if (cell?.type === 'WORK') {
-          if (onlyPinned && !cell.isPinned) return null;
+          if (onlyPinned && !cell.isPinned && i < NEXT_WEEK_INDEX) return null;
           const shift = shiftById.get(cell.shiftId);
           return shift ? { shift, distance: Math.abs(i - index), hasDayOff } : null;
         }
@@ -338,6 +370,7 @@ export function generateSchedule({
     shifts,
     assignments,
     previousAssignments: previous,
+    nextAssignments: next,
     absences,
     coverageRules,
     department,

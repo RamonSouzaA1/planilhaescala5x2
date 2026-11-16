@@ -134,6 +134,31 @@ describe('ShiftsEditor', () => {
     expect(screen.getByText('O intervalo deve ser 0 ou mais minutos.')).toBeInTheDocument();
   });
 
+  it('bloqueia intervalo acima de 120 min e intervalo que não cabe no turno', () => {
+    render(<ShiftsEditor />);
+    fillShift({ name: 'Longo', code: 'TL', start: '07:00', end: '19:00', brk: '150' });
+    fireEvent.click(screen.getByRole('button', { name: 'Adicionar turno' }));
+    expect(store().shifts).toHaveLength(0);
+    expect(screen.getByText('O intervalo pode ter no máximo 120 min (art. 71 da CLT).')).toBeInTheDocument();
+    expect(screen.getByLabelText('Intervalo (min)')).toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByLabelText('Intervalo (min)')).toHaveAttribute('aria-describedby', 'shift-breakDurationMinutes-error');
+
+    fillShift({ start: '07:00', end: '08:00', brk: '60' });
+    fireEvent.click(screen.getByRole('button', { name: 'Adicionar turno' }));
+    expect(store().shifts).toHaveLength(0);
+    expect(screen.getByText('O intervalo deve ser menor que a duração do turno (1h).')).toBeInTheDocument();
+
+    fillShift({ start: '23:30', end: '00:30', brk: '90' }); // vira a meia-noite: 1h de relógio
+    fireEvent.click(screen.getByRole('button', { name: 'Adicionar turno' }));
+    expect(store().shifts).toHaveLength(0);
+    expect(screen.getByText('O intervalo deve ser menor que a duração do turno (1h).')).toBeInTheDocument();
+
+    fillShift({ start: '07:00', end: '17:00', brk: '120' });
+    fireEvent.click(screen.getByRole('button', { name: 'Adicionar turno' }));
+    expect(store().shifts).toHaveLength(1);
+    expect(store().shifts[0]).toMatchObject({ breakDurationMinutes: 120 });
+  });
+
   it('edita e remove um turno', () => {
     store().addShift({ name: 'Abertura', code: 'T1', startTime: '07:00', endTime: '16:00', breakDurationMinutes: 60, color: '#1D4ED8', isNightShift: false });
     render(<ShiftsEditor />);

@@ -12,6 +12,7 @@ import { isSundayOffWeek } from './sundayRotation.js';
 const WEEK = '2026-11-16'; // segunda-feira
 const DATES = getWeekDates(WEEK);
 const PREV_DATES = getWeekDates(addDays(WEEK, -7));
+const NEXT_DATES = getWeekDates(addDays(WEEK, 7));
 
 const SHIFTS = [
   { id: 'T1', code: 'T1', name: 'Abertura', startTime: '07:00', endTime: '16:24', breakDurationMinutes: 60 },
@@ -30,6 +31,10 @@ const SHIFTS = [
   { id: 'F5', code: 'F5', name: 'Madrugada', startTime: '05:00', endTime: '14:24', breakDurationMinutes: 60 },
   { id: 'A', code: 'A', name: 'Manhã', startTime: '07:00', endTime: '12:30', breakDurationMinutes: 15 },
   { id: 'B', code: 'B', name: 'Tarde', startTime: '13:00', endTime: '18:30', breakDurationMinutes: 15 },
+  { id: 'LONGBREAK', code: 'LB', name: 'Intervalo de 3h', startTime: '07:00', endTime: '18:00', breakDurationMinutes: 180 },
+  { id: 'BREAK120', code: 'B120', name: 'Intervalo de 2h', startTime: '07:00', endTime: '17:00', breakDurationMinutes: 120 },
+  { id: 'SPLIT', code: 'SP', name: 'Dividido', startTime: '06:00', endTime: '18:30', breakDurationMinutes: 120 },
+  { id: 'P12', code: 'P12', name: 'Presença 12h', startTime: '06:00', endTime: '18:00', breakDurationMinutes: 120 },
 ];
 
 /** Monta as atribuições de uma semana. Cada item: id de turno, 'O' (folga) ou 'A' (ausência). */
@@ -255,6 +260,84 @@ describe('dias consecutivos (OJ 410 SDI-1)', () => {
   });
 });
 
+describe('virada para a semana seguinte já gravada', () => {
+  // Reprodução da revisão F10: W fecha com T3 no domingo e W+1 abre com T1 na segunda.
+  const current = () => week('ana', ['O', 'O', 'T3', 'T3', 'T3', 'T3', 'T3']);
+  const following = () => week('ana', ['T1', 'T1', 'O', 'O', 'T1', 'T1', 'T1'], NEXT_DATES);
+
+  it('sem a semana seguinte, W não tem infração vermelha', () => {
+    const result = run({ employees: [emp('ana', { sundayGroup: WORK_GROUP })], assignments: current() });
+    expect(result.summary.red).toBe(0);
+  });
+
+  it('com a semana seguinte, interjornada de 9h e 7º dia seguido aparecem no domingo de W', () => {
+    const result = run({
+      employees: [emp('ana', { sundayGroup: WORK_GROUP })],
+      assignments: current(),
+      nextAssignments: following(),
+    });
+    expect(result.status).toBe('RED');
+
+    const rest = result.issues.find((i) => i.code === ISSUE_CODES.INTERJORNADA);
+    expect(rest).toMatchObject({ severity: SEVERITY.RED, employeeId: 'ana', date: DATES[6] });
+    expect(rest.details).toMatchObject({ restMinutes: 9 * 60, previousDate: DATES[6], nextWeekDate: NEXT_DATES[0] });
+    expect(rest.message).toMatch(/semana seguinte/);
+
+    const streak = result.issues.find((i) => i.code === ISSUE_CODES.CONSECUTIVE_DAYS);
+    expect(streak).toMatchObject({ severity: SEVERITY.RED, date: DATES[6] });
+    expect(streak.details).toMatchObject({ consecutiveDays: 7, nextWeekDate: NEXT_DATES[1] });
+
+    expect(getCellIssues(result, 'ana', DATES[6]).map((i) => i.code).sort()).toEqual(
+      [ISSUE_CODES.CONSECUTIVE_DAYS, ISSUE_CODES.INTERJORNADA].sort(),
+    );
+    // Nada é apontado em datas fora da semana validada.
+    expect(result.issues.every((i) => i.date === null || DATES.includes(i.date))).toBe(true);
+  });
+
+  it('é simétrico com a validação de W+1 usando W como semana anterior', () => {
+    const next = validateSchedule({
+      weekStartDate: NEXT_DATES[0],
+      shifts: SHIFTS,
+      department: { defaultSundayRule: 'CUSTOM', weeklyHoursTarget: 42 },
+      employees: [emp('ana', { sundayGroup: WORK_GROUP })],
+      previousAssignments: current(),
+      assignments: following(),
+    });
+    expect(next.issues.find((i) => i.code === ISSUE_CODES.INTERJORNADA)?.date).toBe(NEXT_DATES[0]);
+    expect(next.issues.find((i) => i.code === ISSUE_CODES.CONSECUTIVE_DAYS)?.date).toBe(NEXT_DATES[1]);
+  });
+
+  it('descanso de 35h com folga na segunda de W+1 é verificado', () => {
+    const result = run({
+      employees: [emp('ana', { sundayGroup: WORK_GROUP })],
+      assignments: week('ana', ['T1', 'T1', 'O', 'O', 'T1', 'T1', 'T3']),
+      nextAssignments: week('ana', ['O', 'T1', 'T1', 'T1', 'T1', 'O', 'O'], NEXT_DATES),
+    });
+    const issue = result.issues.find((i) => i.code === ISSUE_CODES.WEEKLY_REST);
+    expect(issue).toMatchObject({ severity: SEVERITY.RED, date: DATES[6] });
+    expect(issue.details).toMatchObject({ restMinutes: 33 * 60, requiredMinutes: 35 * 60, nextWeekDate: NEXT_DATES[1] });
+  });
+
+  it('semana seguinte compatível não gera alertas', () => {
+    const result = run({
+      employees: [emp('ana', { sundayGroup: WORK_GROUP })],
+      assignments: current(),
+      nextAssignments: week('ana', ['T3', 'O', 'O', 'T3', 'T3', 'T3', 'T3'], NEXT_DATES),
+    });
+    expect(result.issues).toEqual([]);
+  });
+
+  it('ignora datas que não são da semana seguinte e colaboradores inativos', () => {
+    const later = getWeekDates(addDays(WEEK, 14));
+    const result = run({
+      employees: [emp('ana', { sundayGroup: WORK_GROUP }), emp('bia', { status: 'INACTIVE' })],
+      assignments: [...current(), ...week('bia', ['O', 'O', 'T3', 'T3', 'T3', 'T3', 'T3'])],
+      nextAssignments: [...week('ana', ['T1', 'T1', 'T1', 'T1', 'T1', 'T1', 'T1'], later), ...week('bia', ['T1', 'T1', 'T1', 'T1', 'T1', 'T1', 'T1'], NEXT_DATES)],
+    });
+    expect(result.issues).toEqual([]);
+  });
+});
+
 describe('ausências', () => {
   it('escalar colaborador em atestado é vermelho', () => {
     const result = run({
@@ -358,6 +441,44 @@ describe('intrajornada e jornada diária', () => {
       assignments: week('ana', ['BREAK30', 'O', 'T1', 'T1', 'T1', 'T1', 'O']),
     });
     expect(codes(result)).not.toContain(ISSUE_CODES.INTRAJORNADA);
+  });
+
+  it('intervalo acima de 120 min é vermelho (art. 71)', () => {
+    const result = run({
+      employees: [emp('ana', { sundayGroup: OFF_GROUP })],
+      assignments: week('ana', ['LONGBREAK', 'O', 'T1', 'T1', 'T1', 'T1', 'O']),
+    });
+    const issues = result.issues.filter((i) => i.code === ISSUE_CODES.INTRAJORNADA);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).toMatchObject({ severity: SEVERITY.RED, date: DATES[0] });
+    expect(issues[0].details).toMatchObject({ breakMinutes: 180, maxBreakMinutes: 120 });
+    expect(issues[0].message).toMatch(/máximo 120 min/);
+    expect(result.status).toBe('RED');
+  });
+
+  it('intervalo de exatamente 120 min é permitido', () => {
+    const result = run({
+      employees: [emp('ana', { sundayGroup: OFF_GROUP })],
+      assignments: week('ana', ['BREAK120', 'O', 'T1', 'T1', 'T1', 'T1', 'O']),
+    });
+    expect(codes(result)).not.toContain(ISSUE_CODES.INTRAJORNADA);
+  });
+
+  it('presença acima de 12h entre entrada e saída é vermelha; exatamente 12h é permitida', () => {
+    const bad = run({
+      employees: [emp('ana', { sundayGroup: OFF_GROUP })],
+      assignments: week('ana', ['SPLIT', 'O', 'SIX', 'SIX', 'SIX', 'SIX', 'O']),
+    });
+    const issue = bad.issues.find((i) => i.code === ISSUE_CODES.INTRAJORNADA);
+    expect(issue).toMatchObject({ severity: SEVERITY.RED, date: DATES[0] });
+    expect(issue.details).toMatchObject({ presenceMinutes: 12 * 60 + 30, maxPresenceMinutes: 12 * 60 });
+    expect(issue.message).toMatch(/12h30 entre entrada e saída/);
+
+    const ok = run({
+      employees: [emp('ana', { sundayGroup: OFF_GROUP })],
+      assignments: week('ana', ['P12', 'O', 'SIX', 'SIX', 'SIX', 'SIX', 'O']),
+    });
+    expect(codes(ok)).not.toContain(ISSUE_CODES.INTRAJORNADA);
   });
 
   it('turno de 12h é vermelho mesmo com a semana dentro de 42h (art. 59)', () => {

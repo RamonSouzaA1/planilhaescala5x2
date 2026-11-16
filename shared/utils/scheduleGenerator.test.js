@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { generateSchedule, getTrailingWorkStreak } from './scheduleGenerator.js';
+import { generateSchedule, getLeadingWorkStreak, getTrailingWorkStreak } from './scheduleGenerator.js';
 import { ISSUE_CODES } from './cltValidator.js';
 import { getWeekDates, addDays } from './dateUtils.js';
 import { isSundayOffWeek, assignSundayGroups } from './sundayRotation.js';
@@ -7,6 +7,7 @@ import { isSundayOffWeek, assignSundayGroups } from './sundayRotation.js';
 const WEEK = '2026-11-16'; // segunda-feira
 const DATES = getWeekDates(WEEK);
 const PREV_DATES = getWeekDates(addDays(WEEK, -7));
+const NEXT_DATES = getWeekDates(addDays(WEEK, 7));
 const OFF_GROUP = [1, 2, 3].find((g) => isSundayOffWeek(g, '1_IN_3', WEEK));
 const WORK_GROUP = [1, 2, 3].find((g) => g !== OFF_GROUP);
 
@@ -165,6 +166,47 @@ describe('virada de semana (OJ 410 e interjornada)', () => {
     expect(codes).not.toContain(ISSUE_CODES.WEEKLY_REST);
     expect(codes).not.toContain(ISSUE_CODES.INTERJORNADA);
     expect(cellsOf(result, 'e0')[0].shiftId).not.toBe('T3');
+  });
+
+  it('respeita a semana seguinte já gravada: descanso de 11h e sequência na virada', () => {
+    const employees = team(1, () => ({ sundayGroup: WORK_GROUP }));
+    const previousAssignments = prevWeek('e0', ['O', 'O', 'T3', 'T3', 'T3', 'T3', 'T3']);
+    // W+1 abre com T1 07:00 na segunda e na terça (não travadas: a semana seguinte conta como fixa).
+    const nextAssignments = ['T1', 'T1', 'O', 'O', 'T1', 'T1', 'T1'].map((cell, i) => ({
+      id: `e0-${NEXT_DATES[i]}`,
+      employeeId: 'e0',
+      date: NEXT_DATES[i],
+      type: cell === 'O' ? 'OFF' : 'WORK',
+      shiftId: cell === 'O' ? undefined : cell,
+      isPinned: false,
+    }));
+
+    const without = gen({ employees, previousAssignments });
+    expect(cellsOf(without, 'e0')[6]).toMatchObject({ type: 'WORK', shiftId: 'T3' });
+
+    const result = gen({ employees, previousAssignments, nextAssignments });
+    const cells = cellsOf(result, 'e0');
+    expect(redIssues(result)).toEqual([]);
+    expect(result.validation.issues.map((i) => i.code)).not.toContain(ISSUE_CODES.INTERJORNADA);
+    expect(result.validation.issues.map((i) => i.code)).not.toContain(ISSUE_CODES.CONSECUTIVE_DAYS);
+    // Domingo não pode fechar às 22:00 antes da abertura das 07:00.
+    if (cells[6].type === 'WORK') expect(cells[6].shiftId).not.toBe('T3');
+    // Sequência do fim de W + início de W+1 (2 dias) fica em no máximo 6.
+    let run = 0;
+    for (const cell of cells) run = cell.type === 'WORK' ? run + 1 : 0;
+    expect(run + 2).toBeLessThanOrEqual(6);
+    // A semana seguinte não é alterada nem devolvida.
+    expect(result.assignments.every((a) => DATES.includes(a.date))).toBe(true);
+  });
+
+  it('getLeadingWorkStreak conta os dias trabalhados no início da semana seguinte', () => {
+    const next = ['T1', 'T1', 'O', 'T1'].map((cell, i) => ({
+      employeeId: 'e0',
+      date: NEXT_DATES[i],
+      type: cell === 'O' ? 'OFF' : 'WORK',
+    }));
+    expect(getLeadingWorkStreak(next, 'e0', WEEK)).toBe(2);
+    expect(getLeadingWorkStreak([], 'e0', WEEK)).toBe(0);
   });
 
   it('rejeita semana que não começa na segunda', () => {

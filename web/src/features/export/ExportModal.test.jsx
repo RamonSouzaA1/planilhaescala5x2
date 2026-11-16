@@ -8,7 +8,6 @@ vi.mock('qrcode', () => ({ default: { toDataURL: vi.fn(() => Promise.resolve('da
 import { toPng } from 'html-to-image';
 import { useScheduleStore } from '../../store/useScheduleStore.js';
 import { ExportModal } from './ExportModal.jsx';
-import { UPGRADE_INTEREST_KEY } from './UpgradeModal.jsx';
 
 const store = () => useScheduleStore.getState();
 const writeText = vi.fn(() => Promise.resolve());
@@ -117,23 +116,39 @@ describe('ExportModal', () => {
 });
 
 describe('UpgradeModal', () => {
-  it('salva o interesse no localStorage, sem cobrança', () => {
+  it('informa que o Pix não está disponível, sem coletar telefone nem prometer aviso', () => {
+    const setItem = vi.spyOn(Storage.prototype, 'setItem');
     open();
     tab('Texto para o grupo');
     fireEvent.click(screen.getByRole('button', { name: 'Copiar' }));
+    setItem.mockClear();
     fireEvent.click(screen.getByRole('button', { name: 'Quero o Plano Líder' }));
-    const dialog = screen.getByRole('dialog', { name: 'Pagamento via Pix chega em breve' });
-    expect(dialog).toHaveTextContent('deixe seu WhatsApp para ser avisado');
+    const dialog = screen.getByRole('dialog', { name: 'Pagamento via Pix indisponível' });
+    expect(dialog).toHaveTextContent('Pagamento via Pix ainda não está disponível. Obrigado pelo interesse!');
+    expect(dialog).toHaveTextContent('Nenhuma cobrança foi feita.');
+    expect(dialog).toHaveTextContent('Plano Líder (R$ 39,90/mês)');
+    expect(dialog).not.toHaveTextContent(/WhatsApp|Avisaremos|avisado/);
+    expect(within(dialog).queryByRole('textbox')).toBeNull();
+    expect(dialog.querySelector('input')).toBeNull();
+    expect(within(dialog).queryByRole('button', { name: 'Avisar-me' })).toBeNull();
+    expect(within(dialog).getByRole('button', { name: 'Entendi' })).toHaveFocus();
+    expect(setItem.mock.calls.some(([key]) => String(key).includes('upgrade-interest'))).toBe(false);
+    expect(localStorage.getItem('planilha-escala-5x2:upgrade-interest')).toBeNull();
 
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Avisar-me' }));
-    expect(within(dialog).getByRole('alert')).toBeInTheDocument();
-    expect(localStorage.getItem(UPGRADE_INTEREST_KEY)).toBeNull();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Voltar' }));
+    expect(screen.getByRole('dialog', { name: UPGRADE })).toBeInTheDocument();
+    setItem.mockRestore();
+  });
 
-    fireEvent.change(within(dialog).getByLabelText('Seu WhatsApp'), { target: { value: '(11) 91234-5678' } });
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Avisar-me' }));
-    const saved = JSON.parse(localStorage.getItem(UPGRADE_INTEREST_KEY));
-    expect(saved).toMatchObject({ plan: 'LEADER_MONTHLY', phone: '(11) 91234-5678' });
-    expect(within(dialog).getByRole('status')).toHaveTextContent('Anotado');
+  it('Entendi encerra o modal de upgrade', () => {
+    open();
+    tab('Texto para o grupo');
+    fireEvent.click(screen.getByRole('button', { name: 'Copiar' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Quero o Passe Transição' }));
+    const dialog = screen.getByRole('dialog', { name: 'Pagamento via Pix indisponível' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Entendi' }));
+    expect(screen.queryByRole('dialog', { name: 'Pagamento via Pix indisponível' })).toBeNull();
+    expect(screen.getByRole('dialog', { name: 'Exportar escala' })).toBeInTheDocument();
   });
 
   it('com alertas vermelhos não afirma 100% dentro da CLT', () => {
