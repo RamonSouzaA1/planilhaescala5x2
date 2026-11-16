@@ -135,3 +135,40 @@ Itens pedidos após a publicação do MVP no GitHub Pages. Entram na sequência 
   * exportação PNG mensal fica para uma etapa posterior, se houver demanda.
 * **Critério de pronto:** gerar um mês de 26 funcionários continua abaixo de 1 segundo (ou com aviso de progresso), sem infrações vermelhas na loja exemplo.
 * **Modelos sugeridos:** Opus para o encadeamento entre semanas do gerador (é regra de negócio); Sonnet para a visualização mensal; Haiku para textos e testes repetitivos.
+
+---
+
+## 9. Itens em aberto (revisão F10, não bloqueantes)
+
+Registrados após a correção dos três bloqueantes (commit `96cc97b`). Ordenados por prioridade para o próximo ciclo.
+
+**Antes de vender o Plano Loja ou de expor a API**
+1. **Líder de setor sem escopo por setor** (ALTA, segurança): `SECTION_LEADER` consegue criar e alterar dados de outro setor da mesma organização. Correção: checar `user.departmentIds` em todas as rotas que recebem `departmentId`, no corpo, na query ou no recurso.
+2. **Magic Link sem revogação e exposto** (MÉDIA, segurança/LGPD): não há rotação do token; o `accessToken` aparece para todos os papéis, inclusive HR_AUDITOR; a rota pública funciona em planos sem portal. Correção: rota de rotação, ocultar o token para quem não escreve e respeitar `allowEmployeePortal`.
+3. **Teto legal de horas pela data** (MÉDIA, regra CLT): a meta aceita até 44h em qualquer data. Correção: teto de 42h a partir de 15/12/2026 (60 dias após a publicação da EC 141/2026, em 16/10/2026) e 40h 12 meses depois, calculado pela `weekStartDate`. A interface (`DepartmentSettings.jsx`) deve usar a mesma data.
+4. **Domingo sem verificação para regra CUSTOM** (ALTA, regra CLT): quatro domingos seguidos trabalhados passam sem alerta. Correção: alerta vermelho por trabalhar três domingos seguidos (Lei 10.101/2000, art. 6º §1º), usando o histórico já carregado pela API.
+
+**Qualidade e regras secundárias**
+5. **Exclusão de turno em uso** (MÉDIA): células ficam sem turno e a validação fica verde. Correção: bloquear com 409 ou gerar alerta `MISSING_SHIFT`.
+6. **Gerador prioriza restrições sobre a OJ 410** (MÉDIA): pode produzir sete dias seguidos quando há restrição de dia ou de domingo. Correção: reservar a folga obrigatória quando a sequência anterior já chega a 6 dias.
+7. **Passe Transição sem data ou com assinatura cancelada** (MÉDIA, antes do webhook de pagamento): não expira sem `planExpiresAt` e ignora `subscriptionStatus`. Correção: tratar como expirado nesses casos.
+8. **Hora noturna prorrogada** (BAIXA, regra CLT): a Súmula 60, II, não é computada.
+9. **Trilha de auditoria** (MÉDIA, spec §7): não guarda o estado anterior e não há publicação da escala.
+
+**LGPD e privacidade**
+10. **Apagar dados e excluir conta** (MÉDIA): não há opção de apagar os dados do navegador, nem de excluir conta ou organização, nem texto de privacidade. Correção: ação de apagar dados locais, exclusão em cascata e política de retenção do IP no log de auditoria.
+11. **Colar lista captura CPF como telefone** (BAIXA): qualquer sequência com dez dígitos vira telefone. Correção: exigir DDD válido e rejeitar padrão de CPF.
+
+**Segurança e configuração**
+12. **JWT de sete dias sem revogação** (BAIXA): correção com `tokenVersion` ou TTL curto com renovação.
+13. **PATCH de ausência sem comparar com o registro gravado** (BAIXA): permite início depois do fim. Correção: mesclar com o registro antes da validação.
+14. **Itens de restrição sem limite de tamanho e sem checagem de turno** (BAIXA): correção com limite por item e conferência de que o id é de um turno da organização.
+15. **`TRUST_PROXY=true` vira `false` em silêncio** (BAIXA): o rate limit passa a contar o IP do proxy. Correção: aceitar `true` e falhar em valor inválido.
+
+**Acabamento e infraestrutura**
+16. **Sem tela de erro no front-end e sem migrations** (BAIXA): um `localStorage` corrompido pode deixar a tela branca; `api/prisma/` tem só o schema, então o deploy depende de `db push`. Correção: boundary com "limpar dados" e `prisma migrate` versionado.
+17. **Front e API divergem na meta semanal** (BAIXA): o campo aceita 41,5h, mas a API aceita só inteiro. Correção: alinhar para inteiro.
+
+**Não verificado sem banco real**
+- Cascatas e a restrição `@@unique([employeeId, date])` do Prisma: mover um funcionário de setor e regravar a semana pode gerar erro P2002 sem tratamento. Só o repositório em memória foi testado.
+- Criptografia em repouso e TLS dependem da hospedagem; o telefone é gravado como texto puro.
