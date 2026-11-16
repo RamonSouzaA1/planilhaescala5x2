@@ -1,8 +1,8 @@
 import { useRef, useState } from 'react';
-import { CalendarDays, ChevronLeft, ChevronRight, Clock, Compass, Users } from 'lucide-react';
-import { useScheduleStore, getCurrentMonday } from './store/useScheduleStore.js';
+import { CalendarDays, Clock, Compass, Users } from 'lucide-react';
+import { useScheduleStore } from './store/useScheduleStore.js';
 import { ScheduleView } from './features/grid/ScheduleView.jsx';
-import { formatWeekRange } from './features/grid/gridUtils.js';
+import { PeriodNav } from './features/grid/PeriodNav.jsx';
 import { TeamPanel } from './features/team/TeamPanel.jsx';
 import { DepartmentSettings } from './features/shifts/DepartmentSettings.jsx';
 import { ShiftsEditor } from './features/shifts/ShiftsEditor.jsx';
@@ -16,9 +16,6 @@ const TABS = [
   { id: 'turnos', label: 'Turnos e Cobertura', Icon: Clock },
 ];
 
-const navBtn =
-  'inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600';
-
 /** Casca do aplicativo: cabeçalho (setor e semana), abas (barra inferior no celular) e a área ativa. */
 export default function App() {
   const [tab, setTab] = useState('escala');
@@ -26,10 +23,6 @@ export default function App() {
   const departments = useScheduleStore((s) => s.departments);
   const activeDepartmentId = useScheduleStore((s) => s.activeDepartmentId);
   const setActiveDepartment = useScheduleStore((s) => s.setActiveDepartment);
-  const weekStart = useScheduleStore((s) => s.currentWeekStart);
-  const prevWeek = useScheduleStore((s) => s.prevWeek);
-  const nextWeek = useScheduleStore((s) => s.nextWeek);
-  const goToWeek = useScheduleStore((s) => s.goToWeek);
   // Abre sozinho só na primeira visita: store vazio e guia ainda não visto nem pulado.
   const [wizardOpen, setWizardOpen] = useState(() => {
     const s = useScheduleStore.getState();
@@ -84,24 +77,7 @@ export default function App() {
             <span className="max-sm:sr-only">Guia de configuração</span>
           </button>
 
-          <div className="ml-auto flex items-center gap-1.5" role="group" aria-label="Navegação de semana">
-            <button type="button" className={navBtn} onClick={prevWeek} aria-label="Semana anterior">
-              <ChevronLeft size={16} aria-hidden="true" />
-            </button>
-            <p className="min-w-[10.5rem] text-center text-sm font-semibold tabular-nums text-slate-900" aria-live="polite" data-testid="week-range">
-              {formatWeekRange(weekStart)}
-            </p>
-            <button type="button" className={navBtn} onClick={nextWeek} aria-label="Próxima semana">
-              <ChevronRight size={16} aria-hidden="true" />
-            </button>
-            <button
-              type="button"
-              onClick={() => goToWeek(getCurrentMonday())}
-              className="h-9 rounded-lg border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600"
-            >
-              Hoje
-            </button>
-          </div>
+          <PeriodNav />
         </div>
 
         <nav

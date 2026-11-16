@@ -126,12 +126,14 @@ Itens pedidos após a publicação do MVP no GitHub Pages. Entram na sequência 
 
 ### F13 — Escala mensal e visualização por mês
 
+> **Status:** F12 (wizard) e F13 (mês) implementadas e publicadas em 16/11/2026. O texto abaixo é o plano original, mantido como registro.
+
 * **Geração do mês inteiro:** oferecer "Gerar mês" além de "Gerar semana". O gerador roda semana a semana, encadeando a semana anterior como entrada (virada de semana, OJ 410 e interjornada), preservando células travadas e ausências de cada semana.
 * **Visualização mensal:** além da grade semanal, uma visualização por mês (calendário ou matriz compacta funcionário × dia do mês), com o semáforo CLT por célula e o total de alertas do mês.
 * **Navegação:** alternância Semana / Mês no cabeçalho; ao trocar, a data selecionada é mantida.
 * **Regras:**
   * a validação do mês usa a semana anterior ao primeiro dia do mês, como a semanal já faz;
-  * meses que começam ou terminam no meio de uma semana mostram os dias fora do mês em cinza e não os geram;
+  * meses que começam ou terminam no meio de uma semana mostram os dias fora do mês em cinza e não editáveis; a geração cobre as semanas inteiras que tocam o mês (5x2 é uma regra semanal), então as células não travadas dessas semanas são substituídas, inclusive dias do mês vizinho, e a tela avisa isso antes de gerar;
   * exportação PNG mensal fica para uma etapa posterior, se houver demanda.
 * **Critério de pronto:** gerar um mês de 26 funcionários continua abaixo de 1 segundo (ou com aviso de progresso), sem infrações vermelhas na loja exemplo.
 * **Modelos sugeridos:** Opus para o encadeamento entre semanas do gerador (é regra de negócio); Sonnet para a visualização mensal; Haiku para textos e testes repetitivos.

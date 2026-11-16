@@ -6,9 +6,9 @@ import { ExportModal } from '../export/ExportModal.jsx';
 import { Modal, btnDanger, btnPrimary, btnSecondary } from '../team/Modal.jsx';
 import { DEFAULT_FILTERS, OFF_FILTER, shiftLabel } from './gridUtils.js';
 
-const iconBtn =
+export const iconBtn =
   'inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600 disabled:cursor-not-allowed disabled:opacity-40';
-const fieldCls =
+export const fieldCls =
   'h-9 rounded-lg border border-slate-300 bg-white px-2.5 text-sm text-slate-900 focus-visible:outline-2 focus-visible:outline-emerald-600';
 
 const MOBILE_QUERY = '(max-width: 639px)';
@@ -16,7 +16,7 @@ const menuItemCls =
   'flex w-full items-center gap-2 rounded-md px-3 py-2.5 text-left text-sm font-medium text-slate-800 hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-emerald-600';
 
 /** True em telas de celular. Sem matchMedia (testes/SSR) assume desktop. */
-function useIsMobile() {
+export function useIsMobile() {
   const [mobile, setMobile] = useState(() => (typeof window !== 'undefined' && window.matchMedia ? window.matchMedia(MOBILE_QUERY).matches : false));
   useEffect(() => {
     if (!window.matchMedia) return undefined;
@@ -30,7 +30,7 @@ function useIsMobile() {
 }
 
 /** Menu "Mais ações": fecha com Esc (devolvendo o foco ao botão) e ao clicar fora. */
-function MoreActionsMenu({ actions }) {
+export function MoreActionsMenu({ actions }) {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef(null);
   const buttonRef = useRef(null);
@@ -85,6 +85,27 @@ function MoreActionsMenu({ actions }) {
 const isTypingTarget = (el) =>
   el instanceof HTMLElement && (['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName) || el.isContentEditable);
 
+/** Atalhos globais: Ctrl+Z desfaz; Ctrl+Y e Ctrl+Shift+Z refazem. Ignorados em campos de texto. */
+export function useHistoryShortcuts() {
+  const undo = useScheduleStore((s) => s.undo);
+  const redo = useScheduleStore((s) => s.redo);
+  useEffect(() => {
+    const onKeyDown = (e) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey || isTypingTarget(e.target)) return;
+      const key = e.key.toLowerCase();
+      if (key === 'z' && !e.shiftKey) {
+        e.preventDefault();
+        undo();
+      } else if (key === 'y' || (key === 'z' && e.shiftKey)) {
+        e.preventDefault();
+        redo();
+      }
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [undo, redo]);
+}
+
 /**
  * Barra de ferramentas da grade: gerar escala, desfazer/refazer, duplicar/limpar semana,
  * busca, filtros e exportação.
@@ -112,22 +133,7 @@ export function GridToolbar({ filters, onFiltersChange }) {
   const tags = useMemo(() => [...new Set(employees.flatMap((e) => e.tags ?? []))].sort((a, b) => a.localeCompare(b, 'pt-BR')), [employees]);
   const feedbackKey = `${department?.id}|${weekStart}`;
 
-  // Atalhos globais: Ctrl+Z desfaz; Ctrl+Y e Ctrl+Shift+Z refazem. Ignorados em campos de texto.
-  useEffect(() => {
-    const onKeyDown = (e) => {
-      if (!(e.ctrlKey || e.metaKey) || e.altKey || isTypingTarget(e.target)) return;
-      const key = e.key.toLowerCase();
-      if (key === 'z' && !e.shiftKey) {
-        e.preventDefault();
-        undo();
-      } else if (key === 'y' || (key === 'z' && e.shiftKey)) {
-        e.preventDefault();
-        redo();
-      }
-    };
-    document.addEventListener('keydown', onKeyDown);
-    return () => document.removeEventListener('keydown', onKeyDown);
-  }, [undo, redo]);
+  useHistoryShortcuts();
 
   const generate = () => {
     const result = generateWeek();

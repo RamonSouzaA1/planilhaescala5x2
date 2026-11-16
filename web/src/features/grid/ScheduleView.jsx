@@ -6,7 +6,14 @@ import { Modal, btnPrimary, btnSecondary, cardCls } from '../team/Modal.jsx';
 import { GridToolbar } from './GridToolbar.jsx';
 import { ScheduleGrid } from './ScheduleGrid.jsx';
 import { ValidationPanel } from './ValidationPanel.jsx';
+import { MonthView } from './MonthView.jsx';
+import { SegmentedControl } from './SegmentedControl.jsx';
 import { DEFAULT_FILTERS } from './gridUtils.js';
+
+const MODE_OPTIONS = [
+  { value: 'week', label: 'Semana' },
+  { value: 'month', label: 'Mês' },
+];
 
 /** Estado vazio: sem setor ativo. */
 function NoDepartment() {
@@ -31,8 +38,8 @@ function NoDepartment() {
   );
 }
 
-/** Aba Escala: barra de ferramentas, grade e Semáforo CLT (ao lado em telas largas, gaveta no celular). */
-export function ScheduleView() {
+/** Modo Semana: barra de ferramentas, grade e Semáforo CLT (ao lado em telas largas, gaveta no celular). */
+function WeekView() {
   const department = useScheduleStore(selectActiveDepartment);
   const validation = useScheduleStore(selectWeekValidation);
   const [filters, setFilters] = useState(DEFAULT_FILTERS);
@@ -88,6 +95,23 @@ export function ScheduleView() {
           <ValidationPanel onFocusCell={focusCell} onShowCoverage={showCoverage} />
         </Modal>
       )}
+    </div>
+  );
+}
+
+/** Aba Escala: alternância Semana | Mês e a visão do modo escolhido. */
+export function ScheduleView() {
+  const department = useScheduleStore(selectActiveDepartment);
+  const viewMode = useScheduleStore((s) => s.viewMode);
+  const setViewMode = useScheduleStore((s) => s.setViewMode);
+  return (
+    <div className="flex flex-col gap-3">
+      {department && (
+        <div>
+          <SegmentedControl label="Modo de visualização" value={viewMode} options={MODE_OPTIONS} onChange={setViewMode} />
+        </div>
+      )}
+      {department && viewMode === 'month' ? <MonthView /> : <WeekView />}
     </div>
   );
 }
