@@ -142,6 +142,8 @@ Itens pedidos após a publicação do MVP no GitHub Pages. Entram na sequência 
 
 Registrados após a correção dos três bloqueantes (commit `96cc97b`). Ordenados por prioridade para o próximo ciclo.
 
+**Status em 16/11/2026:** já implementados os itens 1 (escopo por setor, com `POST /api/users`), 2 (rotação do token, omissão para HR_AUDITOR e portal só em planos que o incluem), 3 (teto legal de 44h/42h/40h pela data), 4 (alerta vermelho de três domingos seguidos), 5 (bloqueio 409 ao excluir turno em uso), 7 (Passe Transição sem data e assinatura vencida), 13, 14, 15 e 17, além da migração SQL inicial do Prisma (item 16, só a parte do banco). **Ainda em aberto:** 6 (gerador versus OJ 410 com restrições, parcialmente coberto), 8 (hora noturna prorrogada), 9 (trilha de auditoria), 10 (apagar dados e excluir conta), 11 (CPF no colar lista), 12 (revogação do JWT), 16 (tela de erro no front) e a validação em PostgreSQL real. Os textos abaixo permanecem como foram registrados.
+
 **Antes de vender o Plano Loja ou de expor a API**
 1. **Líder de setor sem escopo por setor** (ALTA, segurança): `SECTION_LEADER` consegue criar e alterar dados de outro setor da mesma organização. Correção: checar `user.departmentIds` em todas as rotas que recebem `departmentId`, no corpo, na query ou no recurso.
 2. **Magic Link sem revogação e exposto** (MÉDIA, segurança/LGPD): não há rotação do token; o `accessToken` aparece para todos os papéis, inclusive HR_AUDITOR; a rota pública funciona em planos sem portal. Correção: rota de rotação, ocultar o token para quem não escreve e respeitar `allowEmployeePortal`.
