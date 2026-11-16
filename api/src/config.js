@@ -2,6 +2,8 @@ import { randomBytes } from 'node:crypto';
 
 const DEV_CORS_ORIGINS = ['http://localhost:5173', 'http://127.0.0.1:5173'];
 const MIN_SECRET_LENGTH = 32;
+/** Prefixo do valor de exemplo do `.env.example`, que nunca deve ir para produção. */
+const EXAMPLE_SECRET_PREFIX = 'troque-isto';
 
 /**
  * @typedef {Object} AppConfig
@@ -35,6 +37,9 @@ export function loadConfig(env = process.env, { logger = console } = {}) {
   if (isProduction) {
     if (!jwtSecret || jwtSecret.length < MIN_SECRET_LENGTH) {
       throw new Error(`JWT_SECRET é obrigatório em produção e deve ter ao menos ${MIN_SECRET_LENGTH} caracteres.`);
+    }
+    if (jwtSecret.startsWith(EXAMPLE_SECRET_PREFIX)) {
+      throw new Error('JWT_SECRET ainda é o valor de exemplo do .env.example. Gere um segredo aleatório.');
     }
   } else if (!jwtSecret) {
     jwtSecret = randomBytes(48).toString('hex');

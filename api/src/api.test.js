@@ -471,6 +471,9 @@ describe('config', () => {
   it('produção exige JWT_SECRET com 32+ caracteres', () => {
     expect(() => loadConfig({ NODE_ENV: 'production' }, silent)).toThrow(/JWT_SECRET/);
     expect(() => loadConfig({ NODE_ENV: 'production', JWT_SECRET: 'curto' }, silent)).toThrow(/JWT_SECRET/);
+    expect(() =>
+      loadConfig({ NODE_ENV: 'production', JWT_SECRET: 'troque-isto-por-um-segredo-longo-e-aleatorio' }, silent),
+    ).toThrow(/valor de exemplo/);
     const cfg = loadConfig({ NODE_ENV: 'production', JWT_SECRET: 'x'.repeat(32), CORS_ORIGIN: 'https://a.com, https://b.com/' }, silent);
     expect(cfg.corsOrigins).toEqual(['https://a.com', 'https://b.com']);
     expect(cfg.publicAppUrl).toBe('https://planilhaescala5x2.com.br');
