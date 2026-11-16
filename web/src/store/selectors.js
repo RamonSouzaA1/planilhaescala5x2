@@ -6,6 +6,7 @@
 
 import { addDays } from '@escala/shared/utils/dateUtils.js';
 import { validateSchedule } from '@escala/shared/utils/cltValidator.js';
+import { getMonthWeeks, validateMonth } from '@escala/shared/utils/monthSchedule.js';
 
 /** Memoriza só a última chamada, comparando os argumentos por identidade. */
 function memoizeLast(fn) {
@@ -144,5 +145,64 @@ export function selectWeekValidation(state) {
     selectDepartmentAbsences(state),
     state.assignments,
     state.currentWeekStart,
+  );
+}
+
+// ---------------------------------------------------------------- mês (F13)
+
+const monthWeeks = memoizeLast((monthKey) => getMonthWeeks(monthKey));
+
+/**
+ * Segundas-feiras das semanas que tocam o mês atual (4 a 6), em ordem.
+ * @param {any} state
+ * @returns {string[]}
+ */
+export function selectMonthWeeks(state) {
+  return monthWeeks(state.currentMonth);
+}
+
+const monthCells = memoizeLast((assignments, departmentId, weeks) => {
+  const from = weeks[0];
+  const to = addDays(weeks[weeks.length - 1], 6);
+  return assignments.filter((a) => a.departmentId === departmentId && a.date >= from && a.date <= to);
+});
+
+/**
+ * Células do setor ativo nas semanas inteiras do mês atual (as datas de getMonthGridDates).
+ * @param {any} state
+ * @returns {any[]}
+ */
+export function selectMonthAssignments(state) {
+  return monthCells(state.assignments, state.activeDepartmentId, selectMonthWeeks(state));
+}
+
+const validateMonthOf = memoizeLast((department, employees, shifts, rules, absences, assignments, monthKey) => {
+  if (!department) return null;
+  return validateMonth({
+    monthKey,
+    employees,
+    shifts,
+    coverageRules: rules,
+    absences,
+    assignments: assignments.filter((a) => a.departmentId === department.id),
+    department,
+  });
+});
+
+/**
+ * Validação CLT das semanas do mês atual do setor ativo, cada uma com a anterior, a retrasada
+ * e a seguinte (inclusive as de fora do mês).
+ * @param {any} state
+ * @returns {import('@escala/shared/utils/monthSchedule.js').MonthValidation | null} null sem setor ativo
+ */
+export function selectMonthValidation(state) {
+  return validateMonthOf(
+    selectActiveDepartment(state),
+    selectDepartmentEmployees(state),
+    selectDepartmentShifts(state),
+    selectDepartmentCoverageRules(state),
+    selectDepartmentAbsences(state),
+    state.assignments,
+    state.currentMonth,
   );
 }

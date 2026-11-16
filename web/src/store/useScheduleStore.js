@@ -8,6 +8,13 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 import { addDays, getDayOfWeek } from '@escala/shared/utils/dateUtils.js';
 import { DAYS_OF_WEEK } from '@escala/shared/models/schemas.js';
 import { generateSchedule } from '@escala/shared/utils/scheduleGenerator.js';
+import {
+  addMonths,
+  generateMonth as generateMonthSchedule,
+  getMonthKey,
+  getMonthWeeks,
+  isMonthKey,
+} from '@escala/shared/utils/monthSchedule.js';
 import { assignSundayGroups } from '@escala/shared/utils/sundayRotation.js';
 import { createSampleDocument } from './sampleStore.js';
 
@@ -16,6 +23,10 @@ export const STORAGE_VERSION = 1;
 export const HISTORY_LIMIT = 50;
 /** Estados do guia de primeiro uso: ainda não visto, concluído ou pulado. */
 export const ONBOARDING_STATUSES = ['pending', 'done', 'skipped'];
+/** Visualizações da grade: semana (padrão) ou mês. */
+export const VIEW_MODES = ['week', 'month'];
+const DEFAULT_VIEW_MODE = 'week';
+const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
 /** Campos do "documento": é o que entra nos snapshots de desfazer e no localStorage. */
 export const DOCUMENT_KEYS = [
@@ -87,6 +98,65 @@ function recomputeSundayGroups(employees, departments) {
 const inWeek = (date, weekStart) => date >= weekStart && date <= addDays(weekStart, 6);
 const cellKey = (employeeId, date) => `${employeeId}|${date}`;
 
+/**
+ * Primeira e última data das semanas inteiras que tocam o mês.
+ * @param {string} monthKey
+ * @returns {{ weeks: string[], from: string, to: string }}
+ */
+function monthRange(monthKey) {
+  const weeks = getMonthWeeks(monthKey);
+  return { weeks, from: weeks[0], to: addDays(weeks[weeks.length - 1], 6) };
+}
+
+/**
+ * Navegação para a semana da data. O mês exibido é mantido enquanto a semana ainda toca nele;
+ * senão passa a ser o mês da data (assim a semana sempre toca o mês atual).
+ * @param {{ currentMonth: string }} state
+ * @param {string} date - 'YYYY-MM-DD'
+ * @returns {{ currentWeekStart: string, currentMonth: string }}
+ */
+function weekNavigation(state, date) {
+  const week = getMonday(date);
+  const keepMonth = isMonthKey(state.currentMonth) && getMonthWeeks(state.currentMonth).includes(week);
+  return { currentWeekStart: week, currentMonth: keepMonth ? state.currentMonth : getMonthKey(date) };
+}
+
+/**
+ * Insumos do gerador para o setor: equipe, turnos, cobertura, ausências e células do setor.
+ * @param {any} state
+ * @param {{ id: string }} department
+ */
+function departmentInputs(state, department) {
+  const employees = state.employees.filter((e) => e.departmentId === department.id);
+  const employeeIds = new Set(employees.map((e) => e.id));
+  return {
+    employees,
+    shifts: state.shifts.filter((x) => x.departmentId === department.id),
+    coverageRules: state.coverageRules.filter((x) => x.departmentId === department.id),
+    absences: state.absences.filter((a) => employeeIds.has(a.employeeId)),
+    mine: state.assignments.filter((a) => a.departmentId === department.id),
+  };
+}
+
+/**
+ * Substitui as células não travadas do setor entre `from` e `to` pelas geradas (as travadas ficam).
+ * @param {any[]} assignments - células atuais (todas os setores)
+ * @param {string} departmentId
+ * @param {string} from
+ * @param {string} to
+ * @param {any[]} generated - células geradas (sem departmentId)
+ * @returns {any[]}
+ */
+function replaceUnpinned(assignments, departmentId, from, to, generated) {
+  const inRange = (a) => a.departmentId === departmentId && a.date >= from && a.date <= to;
+  const pinned = new Set(assignments.filter((a) => inRange(a) && a.isPinned).map((a) => cellKey(a.employeeId, a.date)));
+  const kept = assignments.filter((a) => !inRange(a) || a.isPinned);
+  const fresh = generated
+    .filter((g) => !pinned.has(cellKey(g.employeeId, g.date)))
+    .map((g) => ({ ...g, departmentId, scheduleCycleId: g.scheduleCycleId ?? `${departmentId}_${getMonday(g.date)}` }));
+  return [...kept, ...fresh];
+}
+
 /** @returns {object} DailyAssignment com departmentId */
 function makeCell({ departmentId, employeeId, date, type, shiftId, isPinned = false }) {
   return {
@@ -115,6 +185,8 @@ function createInitialState() {
   return {
     ...createEmptyDocument(),
     currentWeekStart: getCurrentMonday(),
+    currentMonth: getMonthKey(todayLocal()),
+    viewMode: DEFAULT_VIEW_MODE,
     onboarding: 'pending',
     past: [],
     future: [],
@@ -383,38 +455,56 @@ export const useScheduleStore = create()(
           const department = activeDepartment(state);
           if (!department) return null;
           const weekStart = state.currentWeekStart;
-          const prevStart = addDays(weekStart, -7);
-          const mine = state.assignments.filter((a) => a.departmentId === department.id);
-          const employees = state.employees.filter((e) => e.departmentId === department.id);
+          const { mine, ...inputs } = departmentInputs(state, department);
           const { assignments: generated, validation } = generateSchedule({
+            ...inputs,
             weekStartDate: weekStart,
-            employees,
-            shifts: state.shifts.filter((x) => x.departmentId === department.id),
-            coverageRules: state.coverageRules.filter((x) => x.departmentId === department.id),
-            absences: state.absences.filter((a) => employees.some((e) => e.id === a.employeeId)),
-            previousAssignments: mine.filter((a) => inWeek(a.date, prevStart)),
+            previousAssignments: mine.filter((a) => inWeek(a.date, addDays(weekStart, -7))),
             earlierAssignments: mine.filter((a) => inWeek(a.date, addDays(weekStart, -14))),
             nextAssignments: mine.filter((a) => inWeek(a.date, addDays(weekStart, 7))),
             existingAssignments: mine.filter((a) => inWeek(a.date, weekStart) && a.isPinned),
             department,
             scheduleCycleId: `${department.id}_${weekStart}`,
           });
-          commit((s) => {
-            const pinned = new Set(
-              s.assignments
-                .filter((a) => a.departmentId === department.id && inWeek(a.date, weekStart) && a.isPinned)
-                .map((a) => cellKey(a.employeeId, a.date)),
-            );
-            const kept = s.assignments.filter(
-              (a) => !(a.departmentId === department.id && inWeek(a.date, weekStart)) || a.isPinned,
-            );
-            const fresh = generated
-              .filter((g) => !pinned.has(cellKey(g.employeeId, g.date)))
-              .map((g) => ({ ...g, departmentId: department.id }));
-            return { assignments: [...kept, ...fresh] };
-          });
+          commit((s) => ({
+            assignments: replaceUnpinned(s.assignments, department.id, weekStart, addDays(weekStart, 6), generated),
+          }));
           return validation;
         },
+        /**
+         * Gera as semanas inteiras do mês atual (currentMonth) no setor ativo, em ordem, encadeando
+         * cada semana na seguinte. Substitui as células não travadas dessas semanas; as travadas,
+         * as ausências e a semana anterior/seguinte ao mês já gravadas são respeitadas.
+         * Um único passo de desfazer.
+         * @returns {import('@escala/shared/utils/monthSchedule.js').MonthValidation | null} null sem setor ativo
+         */
+        generateMonth: () => {
+          const state = get();
+          const department = activeDepartment(state);
+          if (!department) return null;
+          const { weeks, from, to } = monthRange(state.currentMonth);
+          const { mine, ...inputs } = departmentInputs(state, department);
+          const { assignments: generated, ...result } = generateMonthSchedule({
+            ...inputs,
+            monthKey: state.currentMonth,
+            previousAssignments: mine.filter((a) => inWeek(a.date, addDays(from, -7))),
+            earlierAssignments: mine.filter((a) => inWeek(a.date, addDays(from, -14))),
+            nextAssignments: mine.filter((a) => inWeek(a.date, addDays(weeks[weeks.length - 1], 7))),
+            existingAssignments: mine.filter((a) => a.date >= from && a.date <= to && a.isPinned),
+            department,
+          });
+          commit((s) => ({ assignments: replaceUnpinned(s.assignments, department.id, from, to, generated) }));
+          return result;
+        },
+        /** Apaga as células do setor ativo nas semanas do mês atual (inclusive travadas). */
+        clearMonth: () =>
+          commit((s) => {
+            const { from, to } = monthRange(s.currentMonth);
+            const kept = s.assignments.filter(
+              (a) => !(a.departmentId === s.activeDepartmentId && a.date >= from && a.date <= to),
+            );
+            return kept.length === s.assignments.length ? null : { assignments: kept };
+          }),
         /** Copia trabalho/folga/turno da semana anterior para a atual (sem travas), substituindo a semana. */
         duplicatePreviousWeek: () =>
           commit((s) => {
@@ -445,10 +535,19 @@ export const useScheduleStore = create()(
 
         // ------------------------------------------------------------ navegação (fora do histórico)
         /** @param {string} weekStart - qualquer data; é ajustada para a segunda-feira da semana */
-        goToWeek: (weekStart) =>
-          set((s) => (/^\d{4}-\d{2}-\d{2}$/.test(weekStart) ? { currentWeekStart: getMonday(weekStart) } : s)),
-        nextWeek: () => set((s) => ({ currentWeekStart: addDays(s.currentWeekStart, 7) })),
-        prevWeek: () => set((s) => ({ currentWeekStart: addDays(s.currentWeekStart, -7) })),
+        goToWeek: (weekStart) => set((s) => (DATE_PATTERN.test(weekStart) ? weekNavigation(s, weekStart) : s)),
+        nextWeek: () => set((s) => weekNavigation(s, addDays(s.currentWeekStart, 7))),
+        prevWeek: () => set((s) => weekNavigation(s, addDays(s.currentWeekStart, -7))),
+        /**
+         * Vai para o mês; a semana atual passa a ser a primeira semana que toca o mês.
+         * @param {string} monthKey - 'YYYY-MM' (inválido é ignorado)
+         */
+        goToMonth: (monthKey) =>
+          set((s) => (isMonthKey(monthKey) ? { currentMonth: monthKey, currentWeekStart: getMonthWeeks(monthKey)[0] } : s)),
+        nextMonth: () => get().goToMonth(addMonths(get().currentMonth, 1)),
+        prevMonth: () => get().goToMonth(addMonths(get().currentMonth, -1)),
+        /** @param {'week' | 'month'} mode - outros valores são ignorados */
+        setViewMode: (mode) => set((s) => (VIEW_MODES.includes(mode) ? { viewMode: mode } : s)),
 
         // ------------------------------------------------------------ guia de primeiro uso (fora do histórico)
         /** @param {'pending' | 'done' | 'skipped'} status */
@@ -465,14 +564,24 @@ export const useScheduleStore = create()(
       name: STORAGE_KEY,
       version: STORAGE_VERSION,
       storage: createJSONStorage(() => localStorage),
-      // Persiste só o documento e a semana atual; past/future ficam de fora.
-      partialize: (state) => ({ ...pickDocument(state), currentWeekStart: state.currentWeekStart, onboarding: state.onboarding }),
-      // Garante que currentWeekStart vindo do localStorage seja sempre uma segunda-feira válida.
+      // Persiste o documento, a navegação (semana, mês, modo) e o guia; past/future ficam de fora.
+      partialize: (state) => ({
+        ...pickDocument(state),
+        currentWeekStart: state.currentWeekStart,
+        currentMonth: state.currentMonth,
+        viewMode: state.viewMode,
+        onboarding: state.onboarding,
+      }),
+      // Garante que currentWeekStart seja uma segunda-feira válida, que currentMonth seja um mês
+      // tocado por essa semana (senão, o mês da semana) e que viewMode seja conhecido.
       merge: (persisted, current) => {
         const saved = persisted && typeof persisted === 'object' ? persisted : {};
-        const week = /^\d{4}-\d{2}-\d{2}$/.test(saved.currentWeekStart ?? '') ? getMonday(saved.currentWeekStart) : current.currentWeekStart;
+        const week = DATE_PATTERN.test(saved.currentWeekStart ?? '') ? getMonday(saved.currentWeekStart) : current.currentWeekStart;
+        const monthFits = isMonthKey(saved.currentMonth) && getMonthWeeks(saved.currentMonth).includes(week);
+        const currentMonth = monthFits ? saved.currentMonth : getMonthKey(week);
+        const viewMode = VIEW_MODES.includes(saved.viewMode) ? saved.viewMode : DEFAULT_VIEW_MODE;
         const onboarding = ONBOARDING_STATUSES.includes(saved.onboarding) ? saved.onboarding : current.onboarding;
-        return { ...current, ...saved, currentWeekStart: week, onboarding };
+        return { ...current, ...saved, currentWeekStart: week, currentMonth, viewMode, onboarding };
       },
     },
   ),
