@@ -62,7 +62,7 @@ export function ScheduleView() {
   }[status];
 
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-3 pb-20 sm:pb-0">
       <GridToolbar filters={filters} onFiltersChange={setFilters} />
       <div className="flex items-start gap-4">
         <div className="min-w-0 flex-1">
@@ -77,10 +77,11 @@ export function ScheduleView() {
         type="button"
         onClick={() => setDrawerOpen(true)}
         aria-label={`Abrir Semáforo CLT: ${pill.text}`}
-        className={`fixed bottom-20 right-4 z-30 flex items-center gap-1.5 rounded-full border-2 px-3 py-2 text-sm font-bold shadow-lg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600 sm:bottom-6 lg:hidden ${pill.cls}`}
+        className={`fixed bottom-[4.5rem] right-3 z-30 flex h-10 min-w-10 items-center justify-center gap-1.5 rounded-full border-2 px-2.5 text-sm font-bold shadow-lg sm:px-3 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600 sm:bottom-6 lg:hidden ${pill.cls}`}
       >
         <pill.Icon size={16} aria-hidden="true" />
-        {pill.text}
+        <span className="hidden sm:inline">{pill.text}</span>
+        {status !== 'GREEN' && <span className="tabular-nums sm:hidden">{total}</span>}
       </button>
       {drawerOpen && (
         <Modal title="Semáforo CLT" onClose={() => setDrawerOpen(false)}>

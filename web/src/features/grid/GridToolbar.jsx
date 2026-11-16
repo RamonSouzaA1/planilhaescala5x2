@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import { CalendarClock, Copy, Filter, Redo2, Search, Share2, Sparkles, Trash2, Undo2 } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { CalendarClock, Copy, Ellipsis, Filter, Redo2, Search, Share2, SlidersHorizontal, Sparkles, Trash2, Undo2 } from 'lucide-react';
 import { useScheduleStore } from '../../store/useScheduleStore.js';
 import { selectActiveDepartment, selectDepartmentEmployees, selectDepartmentShifts } from '../../store/selectors.js';
 import { ExportModal } from '../export/ExportModal.jsx';
@@ -10,6 +10,77 @@ const iconBtn =
   'inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600 disabled:cursor-not-allowed disabled:opacity-40';
 const fieldCls =
   'h-9 rounded-lg border border-slate-300 bg-white px-2.5 text-sm text-slate-900 focus-visible:outline-2 focus-visible:outline-emerald-600';
+
+const MOBILE_QUERY = '(max-width: 639px)';
+const menuItemCls =
+  'flex w-full items-center gap-2 rounded-md px-3 py-2.5 text-left text-sm font-medium text-slate-800 hover:bg-slate-100 focus-visible:outline-2 focus-visible:outline-emerald-600';
+
+/** True em telas de celular. Sem matchMedia (testes/SSR) assume desktop. */
+function useIsMobile() {
+  const [mobile, setMobile] = useState(() => (typeof window !== 'undefined' && window.matchMedia ? window.matchMedia(MOBILE_QUERY).matches : false));
+  useEffect(() => {
+    if (!window.matchMedia) return undefined;
+    const mq = window.matchMedia(MOBILE_QUERY);
+    const onChange = () => setMobile(mq.matches);
+    onChange();
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
+  return mobile;
+}
+
+/** Menu "Mais ações": fecha com Esc (devolvendo o foco ao botão) e ao clicar fora. */
+function MoreActionsMenu({ actions }) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef(null);
+  const buttonRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onKey = (e) => {
+      if (e.key === 'Escape') {
+        setOpen(false);
+        buttonRef.current?.focus();
+      }
+    };
+    const onDown = (e) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false);
+    };
+    document.addEventListener('keydown', onKey);
+    document.addEventListener('pointerdown', onDown);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('pointerdown', onDown);
+    };
+  }, [open]);
+
+  return (
+    <div ref={wrapRef} className="relative">
+      <button ref={buttonRef} type="button" className={iconBtn} aria-label="Mais ações" aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
+        <Ellipsis size={16} aria-hidden="true" />
+      </button>
+      {open && (
+        <div role="menu" aria-label="Mais ações" className="absolute right-0 top-full z-40 mt-1 w-64 rounded-xl border border-slate-200 bg-white p-1 shadow-lg">
+          {actions.map(({ label, Icon, onSelect }) => (
+            <button
+              key={label}
+              type="button"
+              role="menuitem"
+              className={menuItemCls}
+              onClick={() => {
+                setOpen(false);
+                onSelect();
+              }}
+            >
+              <Icon size={16} aria-hidden="true" />
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 const isTypingTarget = (el) =>
   el instanceof HTMLElement && (['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName) || el.isContentEditable);
@@ -35,6 +106,8 @@ export function GridToolbar({ filters, onFiltersChange }) {
   const [feedback, setFeedback] = useState(null); // { key, red, yellow }
   const [confirmClear, setConfirmClear] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const isMobile = useIsMobile();
 
   const tags = useMemo(() => [...new Set(employees.flatMap((e) => e.tags ?? []))].sort((a, b) => a.localeCompare(b, 'pt-BR')), [employees]);
   const feedbackKey = `${department?.id}|${weekStart}`;
@@ -63,15 +136,21 @@ export function GridToolbar({ filters, onFiltersChange }) {
 
   const set = (patch) => onFiltersChange({ ...filters, ...patch });
   const hasFilters = filters.query || filters.shiftId || filters.tag || filters.onlyAlerts;
+  const activeFilterCount = [filters.shiftId, filters.tag, filters.onlyAlerts].filter(Boolean).length;
+  const moreActions = [
+    { label: 'Duplicar semana anterior', Icon: Copy, onSelect: duplicatePreviousWeek },
+    { label: 'Limpar semana', Icon: Trash2, onSelect: () => setConfirmClear(true) },
+    { label: 'Exportar / WhatsApp', Icon: Share2, onSelect: () => setExportOpen(true) },
+  ];
   const shown = feedback && feedback.key === feedbackKey ? feedback : null;
   const totalAlerts = shown ? shown.red + shown.yellow : 0;
 
   return (
     <div className="flex flex-col gap-2 rounded-xl border border-slate-200 bg-white p-2.5 shadow-sm">
-      <div className="flex flex-wrap items-center gap-2">
-        <button type="button" className={`${btnPrimary} h-9`} onClick={generate}>
+      <div className="flex items-center gap-2 sm:flex-wrap">
+        <button type="button" className={`${btnPrimary} h-9 ${isMobile ? 'min-w-0 flex-1 px-2' : ''}`} onClick={generate}>
           <Sparkles size={16} aria-hidden="true" />
-          Gerar Escala Inteligente
+          <span className={isMobile ? 'truncate' : ''}>Gerar Escala Inteligente</span>
         </button>
 
         <div className="flex gap-1" role="group" aria-label="Histórico">
@@ -83,19 +162,25 @@ export function GridToolbar({ filters, onFiltersChange }) {
           </button>
         </div>
 
-        <button type="button" className={`${btnSecondary} h-9`} onClick={duplicatePreviousWeek}>
-          <Copy size={16} aria-hidden="true" />
-          Duplicar semana anterior
-        </button>
-        <button type="button" className={`${btnSecondary} h-9`} onClick={() => setConfirmClear(true)}>
-          <Trash2 size={16} aria-hidden="true" />
-          Limpar semana
-        </button>
+        {isMobile ? (
+          <MoreActionsMenu actions={moreActions} />
+        ) : (
+          <>
+            <button type="button" className={`${btnSecondary} h-9`} onClick={duplicatePreviousWeek}>
+              <Copy size={16} aria-hidden="true" />
+              Duplicar semana anterior
+            </button>
+            <button type="button" className={`${btnSecondary} h-9`} onClick={() => setConfirmClear(true)}>
+              <Trash2 size={16} aria-hidden="true" />
+              Limpar semana
+            </button>
 
-        <button type="button" className={`${btnSecondary} ml-auto h-9`} onClick={() => setExportOpen(true)}>
-          <Share2 size={16} aria-hidden="true" />
-          Exportar / WhatsApp
-        </button>
+            <button type="button" className={`${btnSecondary} ml-auto h-9`} onClick={() => setExportOpen(true)}>
+              <Share2 size={16} aria-hidden="true" />
+              Exportar / WhatsApp
+            </button>
+          </>
+        )}
       </div>
 
       {shown && (
@@ -113,7 +198,7 @@ export function GridToolbar({ filters, onFiltersChange }) {
       )}
 
       <div className="flex flex-wrap items-center gap-2">
-        <div className="relative min-w-[11rem] flex-1 sm:max-w-xs">
+        <div className="relative min-w-0 flex-1 sm:min-w-[11rem] sm:max-w-xs">
           <Search size={16} aria-hidden="true" className="pointer-events-none absolute left-2.5 top-2.5 text-slate-500" />
           <input
             type="search"
@@ -124,38 +209,61 @@ export function GridToolbar({ filters, onFiltersChange }) {
             className={`${fieldCls} w-full pl-8 placeholder:text-slate-500`}
           />
         </div>
-        <select aria-label="Filtrar por turno" value={filters.shiftId} onChange={(e) => set({ shiftId: e.target.value })} className={fieldCls}>
-          <option value="">Todos os turnos</option>
-          {shifts.map((s) => (
-            <option key={s.id} value={s.id}>
-              {shiftLabel(s)} {s.code ? s.name : ''} {s.startTime}–{s.endTime}
-            </option>
-          ))}
-          <option value={OFF_FILTER}>Folga</option>
-        </select>
-        <select aria-label="Filtrar por tag" value={filters.tag} onChange={(e) => set({ tag: e.target.value })} className={fieldCls}>
-          <option value="">Todas as tags</option>
-          {tags.map((t) => (
-            <option key={t} value={t}>
-              {t}
-            </option>
-          ))}
-        </select>
-        <button
-          type="button"
-          aria-pressed={filters.onlyAlerts}
-          onClick={() => set({ onlyAlerts: !filters.onlyAlerts })}
-          className={`inline-flex h-9 items-center gap-1.5 rounded-lg border px-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600 ${
-            filters.onlyAlerts ? 'border-emerald-700 bg-emerald-700 text-white' : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
-          }`}
-        >
-          <Filter size={16} aria-hidden="true" />
-          Só com alertas
-        </button>
-        {hasFilters && (
-          <button type="button" onClick={() => onFiltersChange(DEFAULT_FILTERS)} className="h-9 rounded-lg px-2 text-sm font-medium text-slate-700 underline hover:text-slate-900 focus-visible:outline-2 focus-visible:outline-emerald-600">
-            Limpar filtros
+        {isMobile && (
+          <button
+            type="button"
+            aria-expanded={filtersOpen}
+            aria-controls="grid-filters-panel"
+            onClick={() => setFiltersOpen((o) => !o)}
+            className={`inline-flex h-9 items-center gap-1.5 rounded-lg border px-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600 ${
+              activeFilterCount ? 'border-emerald-700 bg-emerald-50 text-emerald-900' : 'border-slate-300 bg-white text-slate-700'
+            }`}
+          >
+            <SlidersHorizontal size={16} aria-hidden="true" />
+            Filtros
+            {activeFilterCount > 0 && (
+              <span aria-label={`${activeFilterCount} filtro${activeFilterCount > 1 ? 's' : ''} ativo${activeFilterCount > 1 ? 's' : ''}`} className="rounded-full bg-emerald-700 px-1.5 text-xs font-bold text-white">
+                {activeFilterCount}
+              </span>
+            )}
           </button>
+        )}
+        {(!isMobile || filtersOpen) && (
+          <div id="grid-filters-panel" className={isMobile ? 'flex w-full flex-wrap items-center gap-2' : 'contents'}>
+          <select aria-label="Filtrar por turno" value={filters.shiftId} onChange={(e) => set({ shiftId: e.target.value })} className={fieldCls}>
+            <option value="">Todos os turnos</option>
+            {shifts.map((s) => (
+              <option key={s.id} value={s.id}>
+                {shiftLabel(s)} {s.code ? s.name : ''} {s.startTime}–{s.endTime}
+              </option>
+            ))}
+            <option value={OFF_FILTER}>Folga</option>
+          </select>
+          <select aria-label="Filtrar por tag" value={filters.tag} onChange={(e) => set({ tag: e.target.value })} className={fieldCls}>
+            <option value="">Todas as tags</option>
+            {tags.map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            aria-pressed={filters.onlyAlerts}
+            onClick={() => set({ onlyAlerts: !filters.onlyAlerts })}
+            className={`inline-flex h-9 items-center gap-1.5 rounded-lg border px-3 text-sm font-medium focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600 ${
+              filters.onlyAlerts ? 'border-emerald-700 bg-emerald-700 text-white' : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
+            }`}
+          >
+            <Filter size={16} aria-hidden="true" />
+            Só com alertas
+          </button>
+          {hasFilters && (
+            <button type="button" onClick={() => onFiltersChange(DEFAULT_FILTERS)} className="h-9 rounded-lg px-2 text-sm font-medium text-slate-700 underline hover:text-slate-900 focus-visible:outline-2 focus-visible:outline-emerald-600">
+              Limpar filtros
+            </button>
+          )}
+          </div>
         )}
       </div>
 

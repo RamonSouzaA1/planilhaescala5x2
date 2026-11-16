@@ -75,7 +75,7 @@ export function ExportTable({ department, weekStartDate, employees, shifts, assi
           {employees.map((employee, row) => (
             <tr key={employee.id} style={{ background: row % 2 ? '#f8fafc' : '#ffffff' }}>
               <td
-                style={{ ...cellBase, textAlign: 'left', paddingLeft: 8, fontSize: 19, overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}
+                style={{ ...cellBase, textAlign: 'left', padding: '2px 6px 2px 8px', fontSize: 18, lineHeight: 1.15, overflow: 'hidden', whiteSpace: 'normal', overflowWrap: 'anywhere' }}
               >
                 {employee.name}
               </td>
