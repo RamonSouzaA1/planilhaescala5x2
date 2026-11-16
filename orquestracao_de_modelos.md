@@ -105,3 +105,33 @@ Testes obrigatórios antes de qualquer UI depender do gerador:
 * **OJ 410 da SDI-1/TST:** repouso semanal concedido após o 7º dia consecutivo de trabalho viola o art. 7º, XV, da CF e é devido em dobro, mesmo com folga compensatória posterior ou norma coletiva em contrário. Fundamenta a regra "máximo de 6 dias seguidos, inclusive na virada de semana".
 * **EC 141/2026** (promulgada em 16/10/2026): fim da escala 6x1, dois dias de repouso semanal remunerado (um preferencialmente aos domingos) e redução da jornada em duas etapas — **42h semanais** a partir de 60 dias da publicação (dez/2026) e **40h** 12 meses depois (dez/2027). Convenção ou acordo coletivo pode redistribuir a carga diária, respeitados os dois dias de descanso.
 * Antes do lançamento comercial, validar os textos de alerta da interface com um advogado trabalhista.
+
+---
+
+## 8. Próximas evoluções (planejadas, ainda não iniciadas)
+
+Itens pedidos após a publicação do MVP no GitHub Pages. Entram na sequência de desenvolvimento depois das fatias F10 (revisão final) e F11 (README e acabamento).
+
+### F12 — Wizard de primeiro uso (pulável)
+
+* **Problema:** a tela inicial mostra muitos campos de uma vez (setor, equipe, turnos, cobertura, ausências), o que causa estranheza ao iniciar o planejamento.
+* **Comportamento:** ao entrar pela primeira vez, oferecer um assistente em etapas curtas que guia o preenchimento do mínimo necessário para gerar a escala: (1) nome do setor e meta de horas; (2) cadastro da equipe (colar lista ou adicionar); (3) turnos padrão ou personalizados; (4) metas de cobertura simples; (5) gerar a primeira escala.
+* **Regras:**
+  * pode ser pulado a qualquer momento, com "Pular, eu sei fazer" sempre visível;
+  * não reaparece depois de concluído ou pulado (marcador no store, persistido);
+  * pode ser reaberto por um botão "Guia de configuração" no cabeçalho;
+  * cada etapa mostra só os campos dessa etapa; os campos avançados (restrições individuais, regra de domingo própria, ciclo de domingo, convenção de intervalo) ficam recolhidos em "Opções avançadas".
+* **Critério de pronto:** um usuário novo chega a uma escala gerada em até 5 etapas sem abrir nenhuma tela avançada; quem pula cai direto na grade sem perder dados já preenchidos.
+* **Modelos sugeridos:** Sonnet para os componentes e a lógica de etapas; Opus para revisar que o wizard não contorna nenhuma regra de validação; Haiku para os textos.
+
+### F13 — Escala mensal e visualização por mês
+
+* **Geração do mês inteiro:** oferecer "Gerar mês" além de "Gerar semana". O gerador roda semana a semana, encadeando a semana anterior como entrada (virada de semana, OJ 410 e interjornada), preservando células travadas e ausências de cada semana.
+* **Visualização mensal:** além da grade semanal, uma visualização por mês (calendário ou matriz compacta funcionário × dia do mês), com o semáforo CLT por célula e o total de alertas do mês.
+* **Navegação:** alternância Semana / Mês no cabeçalho; ao trocar, a data selecionada é mantida.
+* **Regras:**
+  * a validação do mês usa a semana anterior ao primeiro dia do mês, como a semanal já faz;
+  * meses que começam ou terminam no meio de uma semana mostram os dias fora do mês em cinza e não os geram;
+  * exportação PNG mensal fica para uma etapa posterior, se houver demanda.
+* **Critério de pronto:** gerar um mês de 26 funcionários continua abaixo de 1 segundo (ou com aviso de progresso), sem infrações vermelhas na loja exemplo.
+* **Modelos sugeridos:** Opus para o encadeamento entre semanas do gerador (é regra de negócio); Sonnet para a visualização mensal; Haiku para textos e testes repetitivos.
