@@ -24,7 +24,7 @@ async function uniqueReferralCode(organizations) {
 }
 
 /** Usuário sem o hash da senha. */
-function publicUser(user) {
+export function publicUser(user) {
   const { passwordHash: _hash, ...safe } = user;
   return safe;
 }

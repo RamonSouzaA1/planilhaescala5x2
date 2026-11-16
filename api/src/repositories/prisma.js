@@ -34,6 +34,24 @@ function toDb(data) {
   return out;
 }
 
+/** Inclui só os ids dos setores do usuário (relação implícita "UserDepartments"). */
+const USER_INCLUDE = { departments: { select: { id: true } } };
+
+/** Usuário do banco → domínio: `departments` vira `departmentIds`. */
+function userFromDb(row) {
+  if (!row) return null;
+  const { departments, ...rest } = row;
+  return { ...fromDb(rest), departmentIds: (departments ?? []).map((d) => d.id) };
+}
+
+/** P2002 no e-mail do usuário vira EMAIL_IN_USE; demais erros seguem `rethrow`. */
+function rethrowUser(error) {
+  if (error?.code === 'P2002' && String(error.meta?.target ?? '').includes('email')) {
+    throw new AppError(409, 'EMAIL_IN_USE', 'Já existe uma conta com este e-mail.');
+  }
+  return rethrow(error);
+}
+
 /** Traduz violação de unicidade do Prisma (P2002) em erro de aplicação. */
 function rethrow(error) {
   if (error?.code === 'P2002') throw new AppError(409, 'CONFLICT', 'Registro duplicado.');
@@ -84,15 +102,12 @@ export function createPrismaRepositories(prisma) {
         try {
           const org = await prisma.organization.create({
             data: { ...toDb(organization), users: { create: { ...user, email: user.email.toLowerCase() } } },
-            include: { users: true },
+            include: { users: { include: USER_INCLUDE } },
           });
           const { users, ...orgRow } = org;
-          return { organization: fromDb(orgRow), user: fromDb(users[0]) };
+          return { organization: fromDb(orgRow), user: userFromDb(users[0]) };
         } catch (error) {
-          if (error?.code === 'P2002' && String(error.meta?.target ?? '').includes('email')) {
-            throw new AppError(409, 'EMAIL_IN_USE', 'Já existe uma conta com este e-mail.');
-          }
-          return rethrow(error);
+          return rethrowUser(error);
         }
       },
     },
@@ -114,10 +129,27 @@ export function createPrismaRepositories(prisma) {
     },
     users: {
       async findByEmail(email) {
-        return fromDb(await prisma.userAccount.findUnique({ where: { email: email.toLowerCase() } }));
+        return userFromDb(await prisma.userAccount.findUnique({ where: { email: email.toLowerCase() }, include: USER_INCLUDE }));
       },
       async get(id) {
-        return fromDb(await prisma.userAccount.findUnique({ where: { id } }));
+        return userFromDb(await prisma.userAccount.findUnique({ where: { id }, include: USER_INCLUDE }));
+      },
+      /** Cria um usuário na organização, ligando os setores (que a rota já conferiu na organização). */
+      async create(orgId, { departmentIds = [], ...data }) {
+        try {
+          const row = await prisma.userAccount.create({
+            data: {
+              ...data,
+              email: data.email.toLowerCase(),
+              organizationId: orgId,
+              departments: { connect: departmentIds.map((id) => ({ id })) },
+            },
+            include: USER_INCLUDE,
+          });
+          return userFromDb(row);
+        } catch (error) {
+          return rethrowUser(error);
+        }
       },
     },
     departments: crud(prisma.department),
@@ -147,6 +179,9 @@ export function createPrismaRepositories(prisma) {
           where: { organizationId: orgId, employeeId, date: { in: dates } },
         });
         return rows.map(fromDb);
+      },
+      async countByShift(orgId, shiftId) {
+        return prisma.dailyAssignment.count({ where: { organizationId: orgId, shiftId } });
       },
       async saveWeek(orgId, { departmentId, weekStartDate, cycleWeek, assignments }) {
         return prisma.$transaction(async (tx) => {

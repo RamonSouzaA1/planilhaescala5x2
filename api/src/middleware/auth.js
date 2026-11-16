@@ -1,5 +1,5 @@
-import { getEffectivePlan } from '@escala/shared/utils/planPermissions.js';
-import { AppError, forbidden, unauthorized } from '../errors.js';
+import { getEffectivePlan, isTransitionPassExpired } from '@escala/shared/utils/planPermissions.js';
+import { AppError, forbidden, notFound, unauthorized } from '../errors.js';
 import { verifyToken } from '../security/tokens.js';
 
 /**
@@ -30,19 +30,46 @@ export function requireAuth({ repositories, config }) {
   };
 }
 
+/** Papéis com acesso à organização inteira; os demais ficam restritos a `user.departmentIds`. */
+export const ORG_WIDE_ROLES = ['OWNER', 'STORE_MANAGER', 'HR_AUDITOR'];
+
 /**
- * Fixa o escopo de organização da requisição. O `organizationId` vem SEMPRE do usuário
- * autenticado (token); nunca do corpo, da query ou da URL.
+ * Fixa o escopo da requisição. O `organizationId` vem SEMPRE do usuário autenticado (token);
+ * nunca do corpo, da query ou da URL. `req.departmentScope` é null para os papéis com acesso
+ * à organização inteira e, para SECTION_LEADER (ou papel desconhecido), o conjunto de setores
+ * do usuário.
  * @type {import('express').RequestHandler}
  */
 export function tenantScope(req, _res, next) {
   req.orgId = req.user.organizationId;
+  req.departmentScope = ORG_WIDE_ROLES.includes(req.user.role) ? null : new Set(req.user.departmentIds ?? []);
   next();
 }
 
 /**
- * Calcula o plano efetivo (spec 6.4, item 3). Se o Passe Transição expirou, rebaixa a
- * organização para FREE e persiste, preservando os dados cadastrados.
+ * Indica se o setor está no escopo da requisição.
+ * @param {import('express').Request} req
+ * @param {string | undefined | null} departmentId
+ * @returns {boolean}
+ */
+export function inDepartmentScope(req, departmentId) {
+  return !req.departmentScope || (Boolean(departmentId) && req.departmentScope.has(departmentId));
+}
+
+/**
+ * Garante que o setor está no escopo; fora dele responde 404 (sem revelar que existe).
+ * @param {import('express').Request} req
+ * @param {string | undefined | null} departmentId
+ */
+export function assertDepartmentScope(req, departmentId) {
+  if (!inDepartmentScope(req, departmentId)) throw notFound();
+}
+
+/**
+ * Calcula o plano efetivo (spec 6.4, item 3). Passe Transição expirado (ou sem data) é
+ * rebaixado para FREE e persistido, preservando os dados cadastrados. Assinatura EXPIRED,
+ * PAST_DUE ou CANCELED vale como FREE só na requisição: o plano gravado é mantido para o
+ * webhook de pagamento reativar.
  * @param {{ repositories: import('../repositories/index.js').Repositories, config: import('../config.js').AppConfig }} deps
  * @returns {import('express').RequestHandler}
  */
@@ -50,12 +77,12 @@ export function effectivePlan({ repositories, config }) {
   return async (req, _res, next) => {
     let org = await repositories.organizations.get(req.orgId);
     if (!org) throw unauthorized('Token inválido.');
-    const plan = getEffectivePlan(org, config.now());
-    if (plan !== org.plan) {
-      org = (await repositories.organizations.update(org.id, { plan, subscriptionStatus: 'EXPIRED' })) ?? org;
+    const now = config.now();
+    if (isTransitionPassExpired(org, now)) {
+      org = (await repositories.organizations.update(org.id, { plan: 'FREE', subscriptionStatus: 'EXPIRED' })) ?? org;
     }
     req.org = org;
-    req.plan = plan;
+    req.plan = getEffectivePlan(org, now);
     next();
   };
 }

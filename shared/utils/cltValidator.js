@@ -8,15 +8,26 @@
  *     e jornada diária > 10h (art. 59 CLT);
  *   - mais de 6 dias seguidos (OJ 410 SDI-1/TST);
  *   - descanso e sequência de dias também na virada para a semana seguinte, quando informada;
- *   - semana fora do 5x2 e carga semanal acima da meta do setor (EC 141/2026),
- *     contando a hora noturna reduzida (art. 73 CLT, 22h–05h);
+ *   - semana fora do 5x2 e carga semanal acima do menor valor entre a meta do setor e o teto
+ *     legal da data (EC 141/2026: 44h → 42h → 40h), contando a hora noturna reduzida
+ *     (art. 73 CLT, 22h–05h);
+ *   - terceiro domingo seguido de trabalho (Lei 10.101/2000, art. 6º), quando o histórico
+ *     das duas semanas anteriores foi informado;
  *   - escala em dia de férias/atestado.
  * Amarelo (operacional/sindical): cobertura mínima, tags obrigatórias, picos de horário,
  * rodízio de domingo e restrições individuais.
  */
 
 import { addDays, diffDays, getDayOfWeek, getWeekDates, isMonday, timeToMinutes, toDateKey } from './dateUtils.js';
+import { getLegalWeeklyCap } from './legalWeeklyCap.js';
 import { isSundayOffWeek, resolveSundayRule } from './sundayRotation.js';
+
+export {
+  BASE_WEEKLY_CAP_HOURS,
+  LEGAL_WEEKLY_CAP_STEPS,
+  getLegalWeeklyCap,
+  getLegalWeeklyCapHours,
+} from './legalWeeklyCap.js';
 
 export const SEVERITY = Object.freeze({ RED: 'RED', YELLOW: 'YELLOW' });
 
@@ -33,8 +44,12 @@ export const ISSUE_CODES = Object.freeze({
   MISSING_TAG: 'MISSING_TAG',
   PEAK_COVERAGE: 'PEAK_COVERAGE',
   SUNDAY_ROTATION: 'SUNDAY_ROTATION',
+  SUNDAY_LAW: 'SUNDAY_LAW',
   RESTRICTION: 'RESTRICTION',
 });
+
+/** Domingos seguidos de trabalho a partir dos quais há infração (Lei 10.101/2000, art. 6º). */
+export const MAX_CONSECUTIVE_WORKED_SUNDAYS = 2;
 
 export const MIN_INTERJORNADA_MINUTES = 11 * 60;
 export const MIN_WEEKLY_REST_MINUTES = 35 * 60;
@@ -194,6 +209,36 @@ function formatDateBR(date) {
   return `${d}/${m}`;
 }
 
+/** @param {string} date 'YYYY-MM-DD' → 'DD/MM/AAAA' */
+function formatFullDateBR(date) {
+  const [y, m, d] = date.split('-');
+  return `${d}/${m}/${y}`;
+}
+
+/**
+ * Limite semanal efetivo da semana: o menor entre a meta do setor e o teto legal vigente
+ * na `weekStartDate`. Sem meta válida no setor, vale só o teto legal.
+ * @param {string} weekStartDate
+ * @param {{ weeklyHoursTarget?: number | string } | undefined} department
+ * @returns {{ hours: number, minutes: number, source: 'LAW' | 'DEPARTMENT', legalCap: { hours: number, from: string | null, until: string | null } }}
+ */
+export function getWeeklyHoursLimit(weekStartDate, department) {
+  const legalCap = getLegalWeeklyCap(weekStartDate);
+  const target = Number(department?.weeklyHoursTarget);
+  const hasTarget = Number.isFinite(target) && target > 0;
+  const fromLaw = !hasTarget || legalCap.hours < target;
+  const hours = fromLaw ? legalCap.hours : target;
+  return { hours, minutes: Math.round(hours * 60), source: fromLaw ? 'LAW' : 'DEPARTMENT', legalCap };
+}
+
+/** Texto do limite para a mensagem de WEEKLY_HOURS, citando a norma quando o limite vem da lei. */
+function describeWeeklyLimit(limit) {
+  if (limit.source === 'DEPARTMENT') return `limite ${limit.hours}h`;
+  const { from, until } = limit.legalCap;
+  if (from) return `limite legal de ${limit.hours}h a partir de ${formatFullDateBR(from)}, EC 141/2026`;
+  return `limite legal de ${limit.hours}h até ${formatFullDateBR(until)}, art. 7º, XIII, CF`;
+}
+
 /**
  * Agrupa atribuições por data, para consultas de cobertura.
  * @param {Array<{ date: string }>} assignments
@@ -263,6 +308,8 @@ export function computeHourlyCoverage({ assignments, shifts, date }) {
  * @param {any[]} input.shifts
  * @param {any[]} input.assignments - DailyAssignment da semana
  * @param {any[]} [input.previousAssignments] - DailyAssignment da semana anterior (virada de semana)
+ * @param {any[]} [input.earlierAssignments] - DailyAssignment da semana retrasada (W-2). Usada só na
+ *   regra dos três domingos seguidos; sem ela (ou sem a célula do domingo) não há alerta.
  * @param {any[]} [input.nextAssignments] - DailyAssignment da semana seguinte já gravada. Os pares que
  *   cruzam do domingo da semana validada para a semana seguinte (interjornada, descanso de 35h e
  *   sequência de dias) são apontados na última célula da semana validada.
@@ -278,6 +325,7 @@ export function validateSchedule({
   shifts = [],
   assignments = [],
   previousAssignments = [],
+  earlierAssignments = [],
   nextAssignments = [],
   absences = [],
   coverageRules = [],
@@ -286,6 +334,9 @@ export function validateSchedule({
   if (!isMonday(weekStartDate)) throw new Error(`weekStartDate deve ser uma segunda-feira: ${weekStartDate}`);
 
   const dates = getWeekDates(weekStartDate);
+  const earlierDateSet = new Set(getWeekDates(addDays(weekStartDate, -14)));
+  // Domingos da semana retrasada, da anterior e da validada.
+  const sundays = [addDays(weekStartDate, -8), addDays(weekStartDate, -1), dates[6]];
   const weekDateSet = new Set(dates);
   const nextDates = getWeekDates(addDays(weekStartDate, 7));
   const nextDateSet = new Set(nextDates);
@@ -300,15 +351,17 @@ export function validateSchedule({
   const futureAssignments = normalizeAssignments(nextAssignments).filter(
     (a) => activeIds.has(a.employeeId) && nextDateSet.has(a.date),
   );
+  const olderAssignments = normalizeAssignments(earlierAssignments).filter(
+    (a) => activeIds.has(a.employeeId) && earlierDateSet.has(a.date),
+  );
 
-  const target = Number(department?.weeklyHoursTarget);
-  const hasHoursTarget = Number.isFinite(target) && target > 0;
+  const weeklyLimit = getWeeklyHoursLimit(weekStartDate, department);
   const minBreak = Math.min(60, Math.max(30, Number(department?.minBreakMinutes) || 60));
   const cycleOffset = Number(department?.sundayCycleOffset) || 0;
 
   /** @type {Map<string, Map<string, any>>} colaborador → data → atribuição */
   const cellsByEmployee = new Map();
-  for (const a of [...pastAssignments, ...currentAssignments, ...futureAssignments]) {
+  for (const a of [...olderAssignments, ...pastAssignments, ...currentAssignments, ...futureAssignments]) {
     if (!cellsByEmployee.has(a.employeeId)) cellsByEmployee.set(a.employeeId, new Map());
     cellsByEmployee.get(a.employeeId).set(a.date, a);
   }
@@ -499,14 +552,32 @@ export function validateSchedule({
       }
     }
 
-    // Carga horária semanal acima da meta do setor (42h/40h), com hora noturna reduzida.
-    if (hasHoursTarget && weeklyLegalMinutes > target * 60) {
+    // Carga horária semanal acima de min(meta do setor, teto legal da data), com hora noturna reduzida.
+    if (weeklyLegalMinutes > weeklyLimit.minutes) {
       push({
         code: ISSUE_CODES.WEEKLY_HOURS,
         severity: SEVERITY.RED,
         employeeId: employee.id,
-        message: `${employee.name}: ${formatDuration(weeklyLegalMinutes)} na semana (limite ${target}h).`,
-        details: { workedMinutes: weeklyLegalMinutes, targetMinutes: target * 60 },
+        message: `${employee.name}: ${formatDuration(weeklyLegalMinutes)} na semana (${describeWeeklyLimit(weeklyLimit)}).`,
+        details: {
+          workedMinutes: weeklyLegalMinutes,
+          targetMinutes: weeklyLimit.minutes,
+          legalCapMinutes: weeklyLimit.legalCap.hours * 60,
+          limitSource: weeklyLimit.source,
+        },
+      });
+    }
+
+    // Repouso no domingo ao menos uma vez a cada 3 semanas (Lei 10.101/2000, art. 6º).
+    // Só alerta com as três células conhecidas: sem histórico, não há informação.
+    if (sundays.every(isWork)) {
+      push({
+        code: ISSUE_CODES.SUNDAY_LAW,
+        severity: SEVERITY.RED,
+        employeeId: employee.id,
+        date: sundays[2],
+        message: `${employee.name}: 3º domingo seguido de trabalho (${sundays.map(formatDateBR).join(', ')}); o repouso deve cair no domingo ao menos uma vez a cada 3 semanas (Lei 10.101/2000, art. 6º).`,
+        details: { sundays, maxConsecutiveSundays: MAX_CONSECUTIVE_WORKED_SUNDAYS },
       });
     }
 

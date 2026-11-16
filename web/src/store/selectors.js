@@ -124,6 +124,7 @@ const validate = memoizeLast((department, employees, shifts, rules, absences, as
     absences,
     assignments: mine.filter((a) => a.date >= weekStart && a.date <= end),
     previousAssignments: mine.filter((a) => a.date >= prevStart && a.date < weekStart),
+    earlierAssignments: mine.filter((a) => a.date >= addDays(weekStart, -14) && a.date < prevStart),
     nextAssignments: mine.filter((a) => a.date > end && a.date <= nextEnd),
     department,
   });

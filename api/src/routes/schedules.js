@@ -3,7 +3,7 @@ import { validateSchedule } from '@escala/shared/utils/cltValidator.js';
 import { addDays, getCycleWeek, getDayOfWeek, getWeekDates } from '@escala/shared/utils/dateUtils.js';
 import { generateSchedule } from '@escala/shared/utils/scheduleGenerator.js';
 import { AppError, badRequest, found, sendOk } from '../errors.js';
-import { requireRole, WRITE_ROLES } from '../middleware/auth.js';
+import { assertDepartmentScope, requireRole, WRITE_ROLES } from '../middleware/auth.js';
 import { scheduleGenerateSchema, scheduleQuerySchema, scheduleSaveSchema } from '../schemas.js';
 
 /**
@@ -15,14 +15,24 @@ export function scheduleRoutes({ repositories }) {
   const router = Router();
   const { departments, employees, shifts, absences, coverageRules, schedules, auditLogs } = repositories;
 
-  /** Carrega tudo que o validador e o gerador precisam para a semana (tudo da organização do token). */
+  /** Setor da organização e do escopo do usuário (SECTION_LEADER só os seus), ou 404. */
+  async function scopedDepartment(req, departmentId) {
+    assertDepartmentScope(req, departmentId);
+    return found(await departments.get(req.orgId, departmentId));
+  }
+
+  /**
+   * Carrega tudo que o validador e o gerador precisam para a semana (tudo da organização do token),
+   * inclusive as duas semanas anteriores (virada de semana e regra dos três domingos seguidos).
+   */
   async function loadContext(orgId, department, weekStartDate) {
-    const [team, shiftList, rules, current, previous, next] = await Promise.all([
+    const [team, shiftList, rules, current, previous, earlier, next] = await Promise.all([
       employees.list(orgId, { departmentId: department.id }),
       shifts.list(orgId, { departmentId: department.id }),
       coverageRules.list(orgId, { departmentId: department.id }),
       schedules.listWeek(orgId, department.id, weekStartDate),
       schedules.listWeek(orgId, department.id, addDays(weekStartDate, -7)),
+      schedules.listWeek(orgId, department.id, addDays(weekStartDate, -14)),
       schedules.listWeek(orgId, department.id, addDays(weekStartDate, 7)),
     ]);
     const absenceList = team.length ? await absences.list(orgId, { employeeId: { in: team.map((e) => e.id) } }) : [];
@@ -32,6 +42,7 @@ export function scheduleRoutes({ repositories }) {
       coverageRules: rules,
       assignments: current,
       previousAssignments: previous,
+      earlierAssignments: earlier,
       nextAssignments: next,
       absences: absenceList,
       department: {
@@ -50,6 +61,7 @@ export function scheduleRoutes({ repositories }) {
       shifts: ctx.shifts,
       assignments,
       previousAssignments: ctx.previousAssignments,
+      earlierAssignments: ctx.earlierAssignments,
       nextAssignments: ctx.nextAssignments,
       absences: ctx.absences,
       coverageRules: ctx.coverageRules,
@@ -78,7 +90,7 @@ export function scheduleRoutes({ repositories }) {
 
   router.get('/', async (req, res) => {
     const { departmentId, weekStart } = scheduleQuerySchema.parse(req.query);
-    const department = found(await departments.get(req.orgId, departmentId));
+    const department = await scopedDepartment(req, departmentId);
     const ctx = await loadContext(req.orgId, department, weekStart);
     sendOk(res, {
       departmentId,
@@ -91,7 +103,7 @@ export function scheduleRoutes({ repositories }) {
 
   router.put('/', requireRole(...WRITE_ROLES), async (req, res) => {
     const input = scheduleSaveSchema.parse(req.body ?? {});
-    const department = found(await departments.get(req.orgId, input.departmentId));
+    const department = await scopedDepartment(req, input.departmentId);
     const ctx = await loadContext(req.orgId, department, input.weekStartDate);
 
     const employeeIds = new Set(ctx.team.map((e) => e.id));
@@ -121,7 +133,7 @@ export function scheduleRoutes({ repositories }) {
 
   router.post('/generate', requireRole(...WRITE_ROLES), async (req, res) => {
     const input = scheduleGenerateSchema.parse(req.body ?? {});
-    const department = found(await departments.get(req.orgId, input.departmentId));
+    const department = await scopedDepartment(req, input.departmentId);
     const ctx = await loadContext(req.orgId, department, input.weekStartDate);
     if (!ctx.team.some((e) => e.status !== 'INACTIVE')) {
       throw new AppError(422, 'NOT_ENOUGH_DATA', 'Cadastre ao menos um funcionário ativo antes de gerar a escala.');
@@ -135,6 +147,7 @@ export function scheduleRoutes({ repositories }) {
       employees: ctx.team,
       shifts: ctx.shifts,
       previousAssignments: ctx.previousAssignments,
+      earlierAssignments: ctx.earlierAssignments,
       nextAssignments: ctx.nextAssignments,
       existingAssignments: ctx.assignments,
       absences: ctx.absences,

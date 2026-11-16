@@ -106,7 +106,7 @@ export function createMemoryRepositories() {
           throw new AppError(409, 'EMAIL_IN_USE', 'Já existe uma conta com este e-mail.');
         }
         const org = { createdAt: new Date().toISOString(), ...clone(organization), id: randomUUID() };
-        const account = { createdAt: new Date().toISOString(), ...clone(user), email, id: randomUUID(), organizationId: org.id };
+        const account = { createdAt: new Date().toISOString(), departmentIds: [], ...clone(user), email, id: randomUUID(), organizationId: org.id };
         organizations.set(org.id, org);
         users.set(account.id, account);
         return { organization: clone(org), user: clone(account) };
@@ -134,6 +134,16 @@ export function createMemoryRepositories() {
       },
       async get(id) {
         return clone(users.get(id) ?? null);
+      },
+      /** Cria um usuário na organização (cadastro pelo OWNER). E-mail repetido → 409. */
+      async create(orgId, data) {
+        const email = data.email.toLowerCase();
+        if ([...users.values()].some((u) => u.email === email)) {
+          throw new AppError(409, 'EMAIL_IN_USE', 'Já existe uma conta com este e-mail.');
+        }
+        const account = { createdAt: new Date().toISOString(), departmentIds: [], ...clone(data), email, id: randomUUID(), organizationId: orgId };
+        users.set(account.id, account);
+        return clone(account);
       },
     },
     departments,
@@ -164,6 +174,9 @@ export function createMemoryRepositories() {
       },
       async listForEmployee(orgId, employeeId, dates) {
         return assignments.list(orgId, { employeeId, date: { in: dates } });
+      },
+      async countByShift(orgId, shiftId) {
+        return assignments.count(orgId, { shiftId });
       },
       async saveWeek(orgId, { departmentId, weekStartDate, cycleWeek, assignments: items }) {
         let cycle = [...cycles.rows.values()].find(

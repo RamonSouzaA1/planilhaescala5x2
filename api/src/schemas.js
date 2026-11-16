@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { isMonday, parseDate, formatDate } from '@escala/shared/utils/dateUtils.js';
-import { getShiftWindow, MAX_BREAK_MINUTES } from '@escala/shared/utils/cltValidator.js';
+import { getLegalWeeklyCapHours, getShiftWindow, MAX_BREAK_MINUTES } from '@escala/shared/utils/cltValidator.js';
 
 /** Datas 'YYYY-MM-DD' reais (rejeita 2026-02-31). */
 export const dateString = z
@@ -29,13 +29,32 @@ export const loginSchema = z.object({
   password: z.string().min(1).max(128),
 });
 
-export const departmentSchema = z.object({
-  name,
-  defaultSundayRule: z.enum(['1_IN_3', '1_IN_2', 'CUSTOM']).default('1_IN_3'),
-  weeklyHoursTarget: z.number().int().min(1).max(44).default(42),
-  minBreakMinutes: z.number().int().min(30).max(60).default(60),
-  sundayCycleOffset: z.number().int().min(0).max(2).default(0),
-});
+/** Meta semanal padrão de um setor novo, limitada ao teto legal da data. */
+export const DEFAULT_WEEKLY_HOURS_TARGET = 42;
+
+/**
+ * Schema do setor com a meta semanal inteira de 1 até o teto legal vigente em `today`
+ * (EC 141/2026: 44h → 42h em 15/12/2026 → 40h em 15/12/2027). Mesma regra do front-end.
+ * @param {string} today - 'YYYY-MM-DD' (data de hoje no fuso de Brasília)
+ */
+export function createDepartmentSchema(today) {
+  const cap = getLegalWeeklyCapHours(today);
+  return z.object({
+    name,
+    defaultSundayRule: z.enum(['1_IN_3', '1_IN_2', 'CUSTOM']).default('1_IN_3'),
+    weeklyHoursTarget: z
+      .number()
+      .int('A meta semanal deve ser um número inteiro de horas.')
+      .min(1)
+      .max(cap, `A meta semanal pode ter no máximo ${cap}h (teto legal vigente, EC 141/2026).`)
+      .default(Math.min(DEFAULT_WEEKLY_HOURS_TARGET, cap)),
+    minBreakMinutes: z.number().int().min(30).max(60).default(60),
+    sundayCycleOffset: z.number().int().min(0).max(2).default(0),
+  });
+}
+
+/** Ids de turno nas restrições: tamanho limitado; a rota confere que são turnos da organização. */
+const shiftIdRef = z.string().trim().min(1).max(64);
 
 export const employeeSchema = z.object({
   departmentId: z.string().min(1),
@@ -48,7 +67,7 @@ export const employeeSchema = z.object({
   fixedConstraints: z
     .object({
       unavailableDays: z.array(z.enum(DAYS)).max(7).optional(),
-      unavailableShiftIds: z.array(z.string()).max(50).optional(),
+      unavailableShiftIds: z.array(shiftIdRef).max(50).optional(),
     })
     .optional(),
   status: z.enum(['ACTIVE', 'VACATION', 'MEDICAL_LEAVE', 'INACTIVE']).default('ACTIVE'),
@@ -107,8 +126,38 @@ const absenceBase = z.object({
   notes: z.string().trim().max(500).optional(),
 });
 const endAfterStart = (v) => !v.startDate || !v.endDate || v.endDate >= v.startDate;
-export const absenceSchema = absenceBase.refine(endAfterStart, { message: 'A data final deve ser igual ou posterior à inicial.', path: ['endDate'] });
-export const absenceUpdateSchema = absenceBase.partial().refine(endAfterStart, { message: 'A data final deve ser igual ou posterior à inicial.', path: ['endDate'] });
+export const ABSENCE_DATES_MESSAGE = 'A data final deve ser igual ou posterior à inicial.';
+export const absenceSchema = absenceBase.refine(endAfterStart, { message: ABSENCE_DATES_MESSAGE, path: ['endDate'] });
+/**
+ * PATCH: cada campo é validado aqui; a ordem das datas é conferida pela rota depois de
+ * mesclar o patch com o registro gravado (`absenceDatesError`).
+ */
+export const absenceUpdateSchema = absenceBase.partial();
+
+/**
+ * Mensagem de erro quando a ausência (já mesclada com o registro) termina antes de começar.
+ * @param {{ startDate?: string, endDate?: string }} absence
+ * @returns {string | null}
+ */
+export function absenceDatesError(absence) {
+  return endAfterStart(absence) ? null : ABSENCE_DATES_MESSAGE;
+}
+
+/** Papéis que o OWNER pode cadastrar (OWNER só nasce no registro da organização). */
+export const ASSIGNABLE_ROLES = ['STORE_MANAGER', 'SECTION_LEADER', 'HR_AUDITOR'];
+
+export const userCreateSchema = z
+  .object({
+    name,
+    email: z.email().max(254),
+    password: z.string().min(8, 'A senha deve ter ao menos 8 caracteres.').max(128),
+    role: z.enum(ASSIGNABLE_ROLES),
+    departmentIds: z.array(z.string().trim().min(1).max(64)).max(50).default([]),
+  })
+  .refine((u) => u.role !== 'SECTION_LEADER' || u.departmentIds.length > 0, {
+    message: 'Líder de setor precisa de ao menos um setor.',
+    path: ['departmentIds'],
+  });
 
 export const scheduleQuerySchema = z.object({
   departmentId: z.string().min(1),

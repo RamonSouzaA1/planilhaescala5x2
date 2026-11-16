@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import { useScheduleStore } from '../../store/useScheduleStore.js';
@@ -66,6 +66,66 @@ describe('DepartmentSettings', () => {
     expect(store().departments).toHaveLength(1);
     fireEvent.click(screen.getByRole('button', { name: 'Confirmar remoção' }));
     expect(store().departments).toHaveLength(0);
+  });
+});
+
+describe('DepartmentSettings: teto legal (EC 141/2026)', () => {
+  afterEach(() => vi.useRealTimers());
+  /** Fixa só o relógio (Date); o agendamento do React continua real. */
+  const today = (iso) => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(iso));
+  };
+  const CUSTOM_LABEL = 'Meta personalizada (horas por semana)';
+
+  it('mostra o teto vigente e aceita só meta inteira de 1 até o teto da data de hoje', () => {
+    today('2027-01-10T12:00:00');
+    store().addDepartment({ name: 'Açougue' });
+    render(<DepartmentSettings />);
+    expect(screen.getByTestId('legal-cap')).toHaveTextContent('Teto legal vigente: 42h semanais');
+    expect(screen.getByTestId('legal-cap')).toHaveTextContent('40h a partir de 15/12/2027');
+
+    type('Meta semanal', 'custom');
+    const custom = screen.getByLabelText(CUSTOM_LABEL);
+    expect(custom).toHaveAttribute('max', '42');
+    expect(custom).toHaveAttribute('step', '1');
+
+    type(CUSTOM_LABEL, '41.5');
+    expect(active().weeklyHoursTarget).toBe(42);
+    expect(screen.getByRole('alert')).toHaveTextContent('Use um número inteiro de 1 a 42.');
+    expect(custom).toHaveAttribute('aria-invalid', 'true');
+
+    type(CUSTOM_LABEL, '43');
+    expect(active().weeklyHoursTarget).toBe(42);
+
+    type(CUSTOM_LABEL, '41');
+    expect(active().weeklyHoursTarget).toBe(41);
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('antes de 15/12/2026 o teto é 44h', () => {
+    today('2026-11-16T12:00:00');
+    store().addDepartment({ name: 'Açougue' });
+    render(<DepartmentSettings />);
+    expect(screen.getByTestId('legal-cap')).toHaveTextContent('Teto legal vigente: 44h semanais (até 14/12/2026)');
+    type('Meta semanal', 'custom');
+    expect(screen.getByLabelText(CUSTOM_LABEL)).toHaveAttribute('max', '44');
+  });
+
+  it('a partir de 15/12/2027 a opção de 42h fica indisponível', () => {
+    today('2028-01-10T12:00:00');
+    store().addDepartment({ name: 'Açougue', weeklyHoursTarget: 40 });
+    render(<DepartmentSettings />);
+    expect(screen.getByTestId('legal-cap')).toHaveTextContent('Teto legal vigente: 40h semanais');
+    expect(screen.getByRole('option', { name: /42h/ })).toBeDisabled();
+    expect(screen.getByRole('option', { name: /40h/ })).not.toBeDisabled();
+  });
+
+  it('avisa quando a meta gravada está acima do teto legal', () => {
+    today('2027-01-10T12:00:00');
+    store().addDepartment({ name: 'Açougue', weeklyHoursTarget: 44 });
+    render(<DepartmentSettings />);
+    expect(screen.getByTestId('target-over-cap')).toHaveTextContent('A meta gravada (44h) está acima do teto legal de 42h');
   });
 });
 

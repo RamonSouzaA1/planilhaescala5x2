@@ -343,3 +343,70 @@ describe('casos de borda', () => {
     expect(redIssues(result)).toEqual([]);
   });
 });
+
+describe('3 semanas encadeadas: domingos (Lei 10.101/2000) e teto legal (EC 141/2026)', () => {
+  // A semana de 14/12/2026 ainda vale 44h; a de 21/12/2026 já vale 42h.
+  const WEEKS = ['2026-12-07', '2026-12-14', '2026-12-21'];
+  /** 8h48 por dia (44h na semana): permitido até a semana de 14/12/2026. */
+  const LONG = { id: 'L', code: 'L', name: 'Abertura 44h', startTime: '07:00', endTime: '16:48', breakDurationMinutes: 60 };
+  const CHAIN_SHIFTS = [LONG, SHIFTS[1], SHIFTS[2]];
+
+  function chain(n, department) {
+    const employees = team(n);
+    const results = [];
+    WEEKS.forEach((weekStartDate, i) => {
+      results.push(
+        generateSchedule({
+          weekStartDate,
+          employees,
+          shifts: CHAIN_SHIFTS,
+          department,
+          previousAssignments: results[i - 1]?.assignments ?? [],
+          earlierAssignments: results[i - 2]?.assignments ?? [],
+        }),
+      );
+    });
+    return { employees, results };
+  }
+
+  const sundayType = (result, employeeId, weekStartDate) =>
+    result.assignments.find((a) => a.employeeId === employeeId && a.date === addDays(weekStartDate, 6))?.type;
+
+  for (const n of [7, 26]) {
+    for (const rule of ['CUSTOM', '1_IN_3']) {
+      it(`N = ${n}, regra ${rule}, meta 44h: nenhum SUNDAY_LAW, nenhum WEEKLY_HOURS e nenhum vermelho`, () => {
+        const { employees, results } = chain(n, { defaultSundayRule: rule, weeklyHoursTarget: 44 });
+        results.forEach((result) => {
+          const codes = result.validation.issues.map((i) => i.code);
+          expect(codes).not.toContain(ISSUE_CODES.SUNDAY_LAW);
+          expect(codes).not.toContain(ISSUE_CODES.WEEKLY_HOURS);
+          expect(redIssues(result)).toEqual([]);
+        });
+        // O turno de 44h é usado antes do teto e abandonado depois dele.
+        expect(results[0].assignments.some((a) => a.shiftId === 'L')).toBe(true);
+        expect(results[2].assignments.some((a) => a.shiftId === 'L')).toBe(false);
+        // Ninguém trabalha os três domingos.
+        for (const e of employees) {
+          const sundays = WEEKS.map((w, i) => sundayType(results[i], e.id, w));
+          expect(sundays, e.id).not.toEqual(['WORK', 'WORK', 'WORK']);
+        }
+      });
+    }
+  }
+
+  it('CUSTOM: quem trabalhou os dois domingos anteriores folga no terceiro', () => {
+    const { employees, results } = chain(7, { defaultSundayRule: 'CUSTOM', weeklyHoursTarget: 42 });
+    const workedBoth = employees.filter(
+      (e) => sundayType(results[0], e.id, WEEKS[0]) === 'WORK' && sundayType(results[1], e.id, WEEKS[1]) === 'WORK',
+    );
+    expect(workedBoth.length).toBeGreaterThan(0); // sem a regra, o gerador escalaria todos no domingo
+    for (const e of workedBoth) expect(sundayType(results[2], e.id, WEEKS[2])).toBe('OFF');
+  });
+
+  it('sem histórico da semana retrasada não força a folga de domingo', () => {
+    const employees = team(1);
+    const previousAssignments = prevWeek('e0', ['O', 'O', 'T2', 'T2', 'T2', 'T2', 'T2']);
+    const result = gen({ employees, previousAssignments, department: { defaultSundayRule: 'CUSTOM', weeklyHoursTarget: 42 } });
+    expect(typesOf(result, 'e0')[6]).toBe('WORK');
+  });
+});

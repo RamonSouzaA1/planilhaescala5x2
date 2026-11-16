@@ -245,7 +245,9 @@ describe('validação e regras de plano', () => {
   });
 
   it('gera accessToken base64url de 32 bytes e não permite alterá-lo por PATCH', async () => {
-    const { token } = await register();
+    // O token só aparece em plano com portal (item 2 do backlog); FREE é coberto em accessControl.test.js.
+    const { token, organization } = await register();
+    await repositories.organizations.update(organization.id, { plan: 'STORE_MULTI' });
     const dept = (await post('/api/departments', token, { name: 'A' })).body.data;
     const emp = (await post('/api/employees', token, { departmentId: dept.id, name: 'João' })).body.data;
     expect(emp.accessToken).toMatch(/^[A-Za-z0-9_-]{43}$/);
@@ -349,8 +351,15 @@ describe('schedules', () => {
 });
 
 describe('Magic Link público', () => {
+  // O portal exige plano com allowEmployeePortal (item 2 do backlog): FREE devolve 404.
+  const registerWithPortal = async () => {
+    const account = await register();
+    await repositories.organizations.update(account.organization.id, { plan: 'STORE_MULTI' });
+    return account;
+  };
+
   it('devolve só o mínimo (LGPD) e a data do próximo domingo de folga', async () => {
-    const { token, organization } = await register();
+    const { token, organization } = await registerWithPortal();
     const { dept, team } = await seedDepartment(token, 6);
     await post('/api/schedules/generate', token, { departmentId: dept.id, weekStartDate: WEEK });
     await post('/api/schedules/generate', token, { departmentId: dept.id, weekStartDate: '2026-11-23' });
@@ -380,7 +389,7 @@ describe('Magic Link público', () => {
   });
 
   it('token inválido, inexistente ou de funcionário inativo → 404 genérico idêntico', async () => {
-    const { token } = await register();
+    const { token } = await registerWithPortal();
     const { team } = await seedDepartment(token, 1);
     await request(app).patch(`/api/employees/${team[0].id}`).set(auth(token)).send({ status: 'INACTIVE' });
     const responses = await Promise.all([
@@ -396,7 +405,7 @@ describe('Magic Link público', () => {
   });
 
   it('é somente leitura: POST/PUT/DELETE não existem na rota pública', async () => {
-    const { token } = await register();
+    const { token } = await registerWithPortal();
     const { team } = await seedDepartment(token, 1);
     const url = `/api/public/minha-escala/${team[0].accessToken}`;
     for (const method of ['post', 'put', 'patch', 'delete']) {

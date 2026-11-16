@@ -1,23 +1,27 @@
 /**
  * Motor gerador 5x2 (spec, módulo 3). Algoritmo determinístico em 4 etapas:
  *   1. Travas e ausências: células isPinned, férias/atestados e dias indisponíveis são fixados.
- *   2. Domingos: aplica o rodízio (1 em 3 / 1 em 2) e considera a sequência de dias
- *      trabalhados no fim da semana anterior e no início da semana seguinte já gravada
- *      (OJ 410 SDI-1/TST: no máximo 6 seguidos).
+ *   2. Domingos: folga obrigatória quando os dois domingos anteriores foram trabalhados
+ *      (Lei 10.101/2000, art. 6º; tem prioridade sobre dias indisponíveis), aplica o rodízio
+ *      (1 em 3 / 1 em 2) e considera a sequência de dias trabalhados no fim da semana anterior
+ *      e no início da semana seguinte já gravada (OJ 410 SDI-1/TST: no máximo 6 seguidos).
  *   3. Folgas: escolhe as folgas restantes por custo — preferência de segunda a quarta,
  *      proteção de sexta a domingo e dos dias de pico, espalhamento entre os dias e
  *      penalidades para furo de cobertura mínima e de tags obrigatórias.
  *   4. Turnos: cada colaborador recebe um turno-base da semana (o da semana anterior ou
  *      um balanceado por tags e carga) e o turno do dia só muda para manter o descanso
- *      mínimo (11h entre dias seguidos; 35h quando há folga no meio).
+ *      mínimo (11h entre dias seguidos; 35h quando há folga no meio) ou para caber no limite
+ *      semanal (menor entre a meta do setor e o teto legal da data, EC 141/2026).
  * Módulo puro, compartilhado entre web e api. O resultado já vem validado pelo cltValidator.
  */
 
 import { addDays, getDayOfWeek, getWeekDates, isMonday, toDateKey } from './dateUtils.js';
 import {
   getShiftWindow,
+  getShiftLegalMinutes,
   getCoverageRuleForDay,
   getEmployeeAbsences,
+  getWeeklyHoursLimit,
   validateSchedule,
   MIN_INTERJORNADA_MINUTES,
   MIN_WEEKLY_REST_MINUTES,
@@ -73,6 +77,20 @@ export function getLeadingWorkStreak(nextAssignments, employeeId, weekStartDate)
   return streak;
 }
 
+/**
+ * Indica se o colaborador trabalhou os dois domingos anteriores à semana (W-2 e W-1).
+ * Sem a célula de algum deles (histórico ausente), devolve false.
+ * @param {any[]} history - atribuições das semanas anteriores (datas normalizadas)
+ * @param {string} employeeId
+ * @param {string} weekStartDate
+ * @returns {boolean}
+ */
+export function workedLastTwoSundays(history, employeeId, weekStartDate) {
+  const sundays = new Set([addDays(weekStartDate, -8), addDays(weekStartDate, -1)]);
+  const worked = history.filter((a) => a.employeeId === employeeId && a.type === 'WORK' && sundays.has(a.date));
+  return new Set(worked.map((a) => a.date)).size === sundays.size;
+}
+
 /** Todas as combinações de `k` itens de `items`, em ordem lexicográfica. */
 function combinations(items, k) {
   if (k === 0) return [[]];
@@ -90,6 +108,7 @@ function combinations(items, k) {
  * @param {any[]} input.employees
  * @param {any[]} [input.shifts]
  * @param {any[]} [input.previousAssignments] - semana anterior (virada de semana e turno-base)
+ * @param {any[]} [input.earlierAssignments] - semana retrasada (regra dos três domingos seguidos)
  * @param {any[]} [input.nextAssignments] - semana seguinte já gravada: tratada como travada
  *   (descanso até o primeiro turno dela e sequência de dias na virada)
  * @param {any[]} [input.existingAssignments] - semana atual; só as isPinned são preservadas
@@ -106,6 +125,7 @@ export function generateSchedule({
   employees = [],
   shifts = [],
   previousAssignments = [],
+  earlierAssignments = [],
   nextAssignments = [],
   existingAssignments = [],
   absences = [],
@@ -128,6 +148,11 @@ export function generateSchedule({
     existingAssignments.filter((a) => a.isPinned).map((a) => [`${a.employeeId}|${toDateKey(a.date)}`, a]),
   );
   const previous = previousAssignments.map((a) => ({ ...a, date: toDateKey(a.date) }));
+  const earlierDates = getWeekDates(addDays(weekStartDate, -14));
+  const earlier = earlierAssignments
+    .map((a) => ({ ...a, date: toDateKey(a.date) }))
+    .filter((a) => earlierDates.includes(a.date));
+  const weeklyLimitMinutes = getWeeklyHoursLimit(weekStartDate, department).minutes;
   const nextDates = getWeekDates(addDays(weekStartDate, 7));
   const next = nextAssignments
     .map((a) => ({ ...a, date: toDateKey(a.date) }))
@@ -151,6 +176,11 @@ export function generateSchedule({
       ? 7 - absenceCount - Math.min(WORK_DAYS_PER_WEEK, 7 - absenceCount)
       : Math.min(OFF_DAYS_PER_WEEK, 7 - absenceCount);
     const offBudget = () => totalOff - cells.filter((c) => c?.type === 'OFF').length;
+
+    // Terceiro domingo seguido é infração (Lei 10.101/2000): folga antes das preferências.
+    if (!cells[6] && offBudget() > 0 && workedLastTwoSundays([...earlier, ...previous], employee.id, weekStartDate)) {
+      cells[6] = { type: 'OFF', isPinned: false, fixed: true };
+    }
 
     // Dias indisponíveis viram folga enquanto houver folgas a distribuir.
     const unavailableDays = employee.fixedConstraints?.unavailableDays ?? [];
@@ -335,16 +365,31 @@ export function generateSchedule({
       getShiftWindow(later).start + distance * 1440 - getShiftWindow(earlier).end >=
       (hasDayOff ? MIN_WEEKLY_REST_MINUTES : MIN_INTERJORNADA_MINUTES);
 
+    // Limite semanal: o turno do dia só entra se ainda couberem os dias restantes no turno mais curto.
+    const minLegal = Math.min(...candidates.map(getShiftLegalMinutes));
+    const pinnedMinutes = plan.cells
+      .filter((c) => c.isPinned && c.type === 'WORK' && shiftById.has(c.shiftId))
+      .reduce((sum, c) => sum + getShiftLegalMinutes(shiftById.get(c.shiftId)), 0);
+    let freeWorkDaysLeft = plan.cells.filter((c) => c.type === 'WORK' && !c.isPinned).length;
+    let assignedMinutes = 0;
+
     for (let d = 0; d < 7; d += 1) {
       const cell = plan.cells[d];
       if (cell.type !== 'WORK' || cell.isPinned) continue;
+      freeWorkDaysLeft -= 1;
       const index = 7 + d;
       const before = neighbour(index, -1, false);
       const after = neighbour(index, +1, true);
       const fits = (shift) =>
         (!before || restOk(before.shift, shift, before.distance, before.hasDayOff)) &&
         (!after || restOk(shift, after.shift, after.distance, after.hasDayOff));
-      cell.shiftId = (candidates.find(fits) ?? home).id;
+      const withinLimit = (shift) =>
+        pinnedMinutes + assignedMinutes + getShiftLegalMinutes(shift) + freeWorkDaysLeft * minLegal <= weeklyLimitMinutes;
+      const restFitting = candidates.filter(fits);
+      const shortest = [...restFitting].sort((a, b) => getShiftLegalMinutes(a) - getShiftLegalMinutes(b))[0];
+      const chosen = restFitting.find(withinLimit) ?? shortest ?? home;
+      cell.shiftId = chosen.id;
+      assignedMinutes += getShiftLegalMinutes(chosen);
     }
   }
 
@@ -370,6 +415,7 @@ export function generateSchedule({
     shifts,
     assignments,
     previousAssignments: previous,
+    earlierAssignments: earlier,
     nextAssignments: next,
     absences,
     coverageRules,

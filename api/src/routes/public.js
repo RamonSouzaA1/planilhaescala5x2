@@ -1,21 +1,18 @@
 import { Router } from 'express';
 import { addDays, getDayOfWeek, diffDays, getWeekDates } from '@escala/shared/utils/dateUtils.js';
 import { isSundayOffWeek, resolveSundayRule } from '@escala/shared/utils/sundayRotation.js';
+import { canUseFeature, getEffectivePlan } from '@escala/shared/utils/planPermissions.js';
+import { todayInBrazil } from '../dates.js';
 import { notFound, sendOk } from '../errors.js';
 import { publicTokenSchema } from '../schemas.js';
 
-const TIMEZONE = 'America/Sao_Paulo';
 const DAY_INDEX = { SEG: 0, TER: 1, QUA: 2, QUI: 3, SEX: 4, SAB: 5, DOM: 6 };
 const SUNDAY_LOOKAHEAD_WEEKS = 12;
-
-/** Data de hoje (YYYY-MM-DD) no fuso de Brasília. */
-function todayInBrazil(now) {
-  return new Intl.DateTimeFormat('en-CA', { timeZone: TIMEZONE }).format(now);
-}
 
 /**
  * Rota pública (sem login) do Magic Link, somente leitura:
  * `GET /api/public/minha-escala/:token`. Devolve o mínimo necessário (LGPD).
+ * Organização cujo plano efetivo não tem o portal do funcionário recebe o mesmo 404 genérico.
  * @param {{ repositories: import('../repositories/index.js').Repositories, config: import('../config.js').AppConfig }} deps
  * @returns {import('express').Router}
  */
@@ -29,6 +26,11 @@ export function publicRoutes({ repositories, config }) {
     if (!employee || employee.status === 'INACTIVE') throw notFound('Link inválido.');
 
     const orgId = employee.organizationId;
+    const organization = await repositories.organizations.get(orgId);
+    if (!organization || !canUseFeature(getEffectivePlan(organization, config.now()), 'allowEmployeePortal')) {
+      throw notFound('Link inválido.');
+    }
+
     const [department, shifts] = await Promise.all([
       repositories.departments.get(orgId, employee.departmentId),
       repositories.shifts.list(orgId, { departmentId: employee.departmentId }),

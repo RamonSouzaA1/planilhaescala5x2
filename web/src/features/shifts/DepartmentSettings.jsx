@@ -2,7 +2,25 @@ import { useState } from 'react';
 import { Check, Pencil, Plus, Trash2, X } from 'lucide-react';
 import { useScheduleStore } from '../../store/useScheduleStore.js';
 import { selectActiveDepartment } from '../../store/selectors.js';
+import { getLegalWeeklyCapHours } from '@escala/shared/utils/cltValidator.js';
+import { describeLegalWeeklyCap, todayLocalDate } from './shiftMetrics.js';
 import { btnDanger, btnGhost, btnIcon, btnPrimary, card, errorCls, hintCls, input, labelCls } from './ui.js';
+
+/** Metas pré-definidas do seletor (horas por semana). */
+const PRESET_TARGETS = [
+  { hours: 42, label: '42h (a partir de dez/2026)' },
+  { hours: 40, label: '40h (a partir de dez/2027)' },
+];
+
+/**
+ * Meta personalizada válida: inteiro de 1 até o teto legal da data (igual à API).
+ * @param {string} raw @param {number} cap
+ * @returns {number | null}
+ */
+function parseTarget(raw, cap) {
+  const value = Number(raw);
+  return raw !== '' && Number.isInteger(value) && value >= 1 && value <= cap ? value : null;
+}
 
 const SUNDAY_HELP = {
   '1_IN_3': '1 em 3: cada pessoa folga pelo menos um domingo a cada 3 semanas (Lei 10.101/2000).',
@@ -28,6 +46,12 @@ export function DepartmentSettings() {
   const [renameValue, setRenameValue] = useState('');
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [customMode, setCustomMode] = useState(false);
+  const [targetDraft, setTargetDraft] = useState(null);
+  const [targetError, setTargetError] = useState('');
+
+  // Mesmo critério da API: teto legal pela data de hoje.
+  const today = todayLocalDate();
+  const legalCap = getLegalWeeklyCapHours(today);
 
   const create = (e) => {
     e.preventDefault();
@@ -53,6 +77,19 @@ export function DepartmentSettings() {
   const offset = Number(department?.sundayCycleOffset) || 0;
   const rule = department?.defaultSundayRule ?? '1_IN_3';
   const patch = (p) => updateDepartment(department.id, p);
+  const targetOverCap = Number.isFinite(target) && target > legalCap;
+  const resetTargetEditing = () => {
+    setCustomMode(false);
+    setTargetDraft(null);
+    setTargetError('');
+  };
+  const changeCustomTarget = (raw) => {
+    setTargetDraft(raw);
+    const value = parseTarget(raw, legalCap);
+    if (value === null) return setTargetError(`Use um número inteiro de 1 a ${legalCap}.`);
+    setTargetError('');
+    patch({ weeklyHoursTarget: value });
+  };
 
   return (
     <section aria-labelledby="dept-title" className={`${card} p-4 text-sm text-slate-900`}>
@@ -74,7 +111,7 @@ export function DepartmentSettings() {
                 setActiveDepartment(e.target.value);
                 setRenaming(false);
                 setConfirmRemove(false);
-                setCustomMode(false);
+                resetTargetEditing();
               }}
               disabled={!departments.length}
             >
@@ -214,13 +251,16 @@ export function DepartmentSettings() {
                 if (e.target.value === 'custom') {
                   setCustomMode(true);
                 } else {
-                  setCustomMode(false);
+                  resetTargetEditing();
                   patch({ weeklyHoursTarget: Number(e.target.value) });
                 }
               }}
             >
-              <option value="42">42h (a partir de dez/2026)</option>
-              <option value="40">40h (a partir de dez/2027)</option>
+              {PRESET_TARGETS.map(({ hours, label }) => (
+                <option key={hours} value={String(hours)} disabled={hours > legalCap}>
+                  {label}
+                </option>
+              ))}
               <option value="custom">Personalizada</option>
             </select>
             {targetSelect === 'custom' && (
@@ -231,21 +271,31 @@ export function DepartmentSettings() {
                 <input
                   id="dept-target-custom"
                   type="number"
+                  inputMode="numeric"
                   min="1"
-                  max="44"
-                  step="0.5"
+                  max={String(legalCap)}
+                  step="1"
                   className={input}
-                  value={Number.isFinite(target) ? target : ''}
-                  onChange={(e) => {
-                    const v = Number(e.target.value);
-                    if (v > 0) patch({ weeklyHoursTarget: v });
-                  }}
+                  value={targetDraft ?? (Number.isFinite(target) ? target : '')}
+                  aria-invalid={targetError ? 'true' : undefined}
+                  aria-describedby={targetError ? 'dept-target-error' : 'dept-target-help'}
+                  onChange={(e) => changeCustomTarget(e.target.value)}
                 />
+                {targetError && (
+                  <p id="dept-target-error" role="alert" className={errorCls}>
+                    {targetError}
+                  </p>
+                )}
               </div>
             )}
-            <p id="dept-target-help" className={hintCls}>
-              EC 141/2026: 42h semanais a partir de dez/2026 e 40h a partir de dez/2027.
+            <p id="dept-target-help" className={hintCls} data-testid="legal-cap">
+              {describeLegalWeeklyCap(today)}
             </p>
+            {targetOverCap && (
+              <p className={errorCls} data-testid="target-over-cap">
+                A meta gravada ({target}h) está acima do teto legal de {legalCap}h; a validação usa {legalCap}h.
+              </p>
+            )}
           </div>
 
           <div>

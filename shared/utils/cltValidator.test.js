@@ -3,6 +3,8 @@ import {
   validateSchedule,
   computeHourlyCoverage,
   getCellIssues,
+  getLegalWeeklyCap,
+  getLegalWeeklyCapHours,
   SEVERITY,
   ISSUE_CODES,
 } from './cltValidator.js';
@@ -754,5 +756,124 @@ describe('índices e utilitários', () => {
     const start = performance.now();
     run({ employees, assignments });
     expect(performance.now() - start).toBeLessThan(500);
+  });
+});
+
+describe('teto legal de horas pela data (EC 141/2026)', () => {
+  /** 8h48 por dia: 44h em 5 dias. */
+  const L44 = { id: 'L44', code: 'L44', name: 'Abertura 44h', startTime: '07:00', endTime: '16:48', breakDurationMinutes: 60 };
+  const runOn = (weekStartDate, cells, department) =>
+    validateSchedule({
+      weekStartDate,
+      shifts: [...SHIFTS, L44],
+      department,
+      employees: [emp('ana')],
+      assignments: week('ana', cells, getWeekDates(weekStartDate)),
+    });
+  const weeklyHoursIssue = (result) => result.issues.find((i) => i.code === ISSUE_CODES.WEEKLY_HOURS);
+
+  it('getLegalWeeklyCapHours: 44h até 14/12/2026, 42h até 14/12/2027 e 40h a partir de 15/12/2027', () => {
+    expect(getLegalWeeklyCapHours('2026-11-16')).toBe(44);
+    expect(getLegalWeeklyCapHours('2026-12-14')).toBe(44);
+    expect(getLegalWeeklyCapHours('2026-12-15')).toBe(42);
+    expect(getLegalWeeklyCapHours('2026-12-21')).toBe(42);
+    expect(getLegalWeeklyCapHours('2027-12-14')).toBe(42);
+    expect(getLegalWeeklyCapHours('2027-12-15')).toBe(40);
+    expect(getLegalWeeklyCapHours('2031-01-06')).toBe(40);
+    expect(getLegalWeeklyCapHours('2026-12-15T10:00:00.000Z')).toBe(42);
+  });
+
+  it('getLegalWeeklyCap informa a vigência da etapa', () => {
+    expect(getLegalWeeklyCap('2026-11-16')).toEqual({ hours: 44, from: null, until: '2026-12-14' });
+    expect(getLegalWeeklyCap('2027-03-01')).toEqual({ hours: 42, from: '2026-12-15', until: '2027-12-14' });
+    expect(getLegalWeeklyCap('2028-01-03')).toEqual({ hours: 40, from: '2027-12-15', until: null });
+  });
+
+  it('data inválida lança erro', () => {
+    expect(() => getLegalWeeklyCapHours('15/12/2026')).toThrow(/Data inválida/);
+    expect(() => getLegalWeeklyCapHours(undefined)).toThrow(/Data inválida/);
+  });
+
+  it('semana de 14/12/2026 ainda aceita 44h com meta 44h', () => {
+    const result = runOn('2026-12-14', ['L44', 'O', 'L44', 'L44', 'L44', 'L44', 'O'], { defaultSundayRule: 'CUSTOM', weeklyHoursTarget: 44 });
+    expect(weeklyHoursIssue(result)).toBeUndefined();
+  });
+
+  it('a partir da semana de 21/12/2026 a meta de 44h é limitada a 42h pela lei', () => {
+    const result = runOn('2026-12-21', ['L44', 'O', 'L44', 'L44', 'L44', 'L44', 'O'], { defaultSundayRule: 'CUSTOM', weeklyHoursTarget: 44 });
+    const issue = weeklyHoursIssue(result);
+    expect(issue?.severity).toBe(SEVERITY.RED);
+    expect(issue?.details).toMatchObject({ workedMinutes: 44 * 60, targetMinutes: 42 * 60, legalCapMinutes: 42 * 60, limitSource: 'LAW' });
+    expect(issue?.message).toMatch(/limite legal de 42h/);
+    expect(issue?.message).toMatch(/EC 141\/2026/);
+  });
+
+  it('meta do setor abaixo do teto continua valendo e a mensagem não cita a lei', () => {
+    const result = runOn('2026-12-21', ['T1', 'O', 'T1', 'T1', 'T1', 'T1', 'O'], { defaultSundayRule: 'CUSTOM', weeklyHoursTarget: 40 });
+    const issue = weeklyHoursIssue(result);
+    expect(issue?.details).toMatchObject({ targetMinutes: 40 * 60, limitSource: 'DEPARTMENT' });
+    expect(issue?.message).toContain('(limite 40h)');
+  });
+
+  it('sem meta no setor aplica só o teto legal (40h a partir de 15/12/2027)', () => {
+    const ok = runOn('2027-12-13', ['T1', 'O', 'T1', 'T1', 'T1', 'T1', 'O'], { defaultSundayRule: 'CUSTOM' });
+    expect(weeklyHoursIssue(ok)).toBeUndefined();
+    const result = runOn('2027-12-20', ['T1', 'O', 'T1', 'T1', 'T1', 'T1', 'O'], { defaultSundayRule: 'CUSTOM' });
+    expect(weeklyHoursIssue(result)?.details).toMatchObject({ workedMinutes: 42 * 60, targetMinutes: 40 * 60, limitSource: 'LAW' });
+  });
+});
+
+describe('três domingos seguidos (Lei 10.101/2000, art. 6º)', () => {
+  const EARLIER_DATES = getWeekDates(addDays(WEEK, -14));
+  /** Trabalha de quarta a domingo: o domingo é sempre trabalhado. */
+  const SUNDAY_WORK = ['O', 'O', 'T1', 'T1', 'T1', 'T1', 'T1'];
+  const custom = { defaultSundayRule: 'CUSTOM', weeklyHoursTarget: 42 };
+  const sundayLaw = (result) => result.issues.filter((i) => i.code === ISSUE_CODES.SUNDAY_LAW);
+  const runSundays = ({ current = SUNDAY_WORK, previous = SUNDAY_WORK, earlier, earlierDates = EARLIER_DATES, ...rest }) =>
+    run({
+      department: custom,
+      employees: [emp('ana')],
+      assignments: week('ana', current),
+      previousAssignments: week('ana', previous, PREV_DATES),
+      earlierAssignments: earlier ? week('ana', earlier, earlierDates) : undefined,
+      ...rest,
+    });
+
+  it('3º domingo seguido trabalhado é vermelho, inclusive na regra CUSTOM', () => {
+    const result = runSundays({ earlier: SUNDAY_WORK });
+    const issues = sundayLaw(result);
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).toMatchObject({ severity: SEVERITY.RED, employeeId: 'ana', date: DATES[6] });
+    expect(issues[0].details.sundays).toEqual([EARLIER_DATES[6], PREV_DATES[6], DATES[6]]);
+    expect(issues[0].message).toContain('Lei 10.101/2000');
+    expect(codes(result)).not.toContain(ISSUE_CODES.SUNDAY_ROTATION); // CUSTOM continua sem o amarelo de rodízio
+    expect(getCellIssues(result, 'ana', DATES[6]).map((i) => i.code)).toContain(ISSUE_CODES.SUNDAY_LAW);
+  });
+
+  it('vale também para quem segue o rodízio 1 em 3', () => {
+    const result = runSundays({
+      earlier: SUNDAY_WORK,
+      department: { defaultSundayRule: '1_IN_3', weeklyHoursTarget: 42 },
+      employees: [emp('ana', { sundayGroup: WORK_GROUP })],
+    });
+    expect(sundayLaw(result)).toHaveLength(1);
+  });
+
+  it('sem a semana retrasada (histórico incompleto) não alerta', () => {
+    expect(sundayLaw(runSundays({}))).toEqual([]);
+  });
+
+  it('folga ou ausência em um dos domingos anteriores não alerta', () => {
+    expect(sundayLaw(runSundays({ earlier: ['T1', 'O', 'T1', 'T1', 'T1', 'T1', 'O'] }))).toEqual([]);
+    expect(sundayLaw(runSundays({ earlier: SUNDAY_WORK, previous: ['O', 'O', 'T1', 'T1', 'T1', 'T1', 'A'] }))).toEqual([]);
+  });
+
+  it('folga no domingo da semana validada não alerta', () => {
+    expect(sundayLaw(runSundays({ earlier: SUNDAY_WORK, current: ['T1', 'O', 'T1', 'T1', 'T1', 'T1', 'O'] }))).toEqual([]);
+  });
+
+  it('células de earlierAssignments fora da semana retrasada são ignoradas', () => {
+    const result = runSundays({ earlier: SUNDAY_WORK, earlierDates: getWeekDates(addDays(WEEK, -21)) });
+    expect(sundayLaw(result)).toEqual([]);
   });
 });

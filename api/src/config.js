@@ -21,12 +21,29 @@ const EXAMPLE_SECRET_PREFIX = 'troque-isto';
  */
 
 /**
+ * Interpreta TRUST_PROXY: vazio/ausente ou `false` → false; `true` → confia em todos os proxies;
+ * inteiro ≥ 0 → quantidade de proxies confiáveis. Qualquer outro valor falha na subida, para o
+ * rate limit não passar a contar o IP do proxy em silêncio.
+ * @param {string | undefined} raw
+ * @returns {boolean | number}
+ * @throws {Error} se o valor for inválido
+ */
+export function parseTrustProxy(raw) {
+  const value = (raw ?? '').trim().toLowerCase();
+  if (value === '' || value === 'false') return false;
+  if (value === 'true') return true;
+  if (/^\d+$/.test(value)) return Number(value);
+  throw new Error(`TRUST_PROXY inválido: "${raw}". Use true, false ou o número de proxies confiáveis (ex.: 1).`);
+}
+
+/**
  * Lê e valida a configuração a partir das variáveis de ambiente.
  * Em produção, falha se JWT_SECRET faltar ou tiver menos de 32 caracteres.
  * Em desenvolvimento, usa um segredo efêmero aleatório (sessões caem ao reiniciar).
  * @param {Record<string, string | undefined>} [env=process.env]
  * @param {{ logger?: AppConfig['logger'] }} [options]
  * @returns {AppConfig}
+ * @throws {Error} se JWT_SECRET (produção) ou TRUST_PROXY forem inválidos
  */
 export function loadConfig(env = process.env, { logger = console } = {}) {
   const nodeEnv = env.NODE_ENV || 'development';
@@ -55,8 +72,7 @@ export function loadConfig(env = process.env, { logger = console } = {}) {
     logger.warn('[config] CORS_ORIGIN vazio em produção: nenhuma origem de navegador será aceita.');
   }
 
-  const trustProxyRaw = env.TRUST_PROXY;
-  const trustProxy = trustProxyRaw === undefined || trustProxyRaw === '' ? false : Number(trustProxyRaw) || false;
+  const trustProxy = parseTrustProxy(env.TRUST_PROXY);
 
   return {
     nodeEnv,

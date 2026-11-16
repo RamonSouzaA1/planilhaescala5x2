@@ -159,9 +159,11 @@ describe('isTransitionPassExpired', () => {
     expect(isTransitionPassExpired(org, NOW)).toBe(false);
   });
 
-  it('passe sem planExpiresAt retorna false', () => {
-    const org = { plan: 'TRANSITION_PASS' };
-    expect(isTransitionPassExpired(org, NOW)).toBe(false);
+  // Mudança (backlog item 7): passe sem data de expiração é tratado como expirado.
+  it('passe sem planExpiresAt (ou com data inválida) é tratado como expirado', () => {
+    expect(isTransitionPassExpired({ plan: 'TRANSITION_PASS' }, NOW)).toBe(true);
+    expect(isTransitionPassExpired({ plan: 'TRANSITION_PASS', planExpiresAt: null }, NOW)).toBe(true);
+    expect(isTransitionPassExpired({ plan: 'TRANSITION_PASS', planExpiresAt: 'não é data' }, NOW)).toBe(true);
   });
 
   it('exatamente no instante de expiração ainda não expirou (now > expiresAt)', () => {
@@ -204,5 +206,25 @@ describe('getEffectivePlan', () => {
     expect(getEffectivePlan({ plan: 'LEADER_MONTHLY', planExpiresAt: '2020-01-01' }, NOW)).toBe(
       'LEADER_MONTHLY',
     );
+  });
+
+  it('passe Transição sem planExpiresAt vira FREE', () => {
+    expect(getEffectivePlan({ plan: 'TRANSITION_PASS' }, NOW)).toBe('FREE');
+  });
+
+  it('assinatura EXPIRED, PAST_DUE ou CANCELED rebaixa planos pagos para FREE', () => {
+    for (const subscriptionStatus of ['EXPIRED', 'PAST_DUE', 'CANCELED']) {
+      for (const plan of ['LEADER_MONTHLY', 'STORE_MULTI', 'ENTERPRISE']) {
+        expect(getEffectivePlan({ plan, subscriptionStatus }, NOW), `${plan}/${subscriptionStatus}`).toBe('FREE');
+      }
+      const validPass = { plan: 'TRANSITION_PASS', planExpiresAt: '2026-07-01T00:00:00.000Z', subscriptionStatus };
+      expect(getEffectivePlan(validPass, NOW)).toBe('FREE');
+    }
+  });
+
+  it('assinatura ACTIVE (ou sem status) mantém o plano', () => {
+    expect(getEffectivePlan({ plan: 'STORE_MULTI', subscriptionStatus: 'ACTIVE' }, NOW)).toBe('STORE_MULTI');
+    expect(getEffectivePlan({ plan: 'STORE_MULTI' }, NOW)).toBe('STORE_MULTI');
+    expect(getEffectivePlan({ plan: 'FREE', subscriptionStatus: 'CANCELED' }, NOW)).toBe('FREE');
   });
 });

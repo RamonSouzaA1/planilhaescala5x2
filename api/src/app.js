@@ -10,6 +10,7 @@ import { authRoutes } from './routes/auth.js';
 import { publicRoutes } from './routes/public.js';
 import { resourceRoutes } from './routes/resources.js';
 import { scheduleRoutes } from './routes/schedules.js';
+import { userRoutes } from './routes/users.js';
 
 /**
  * Cria o limitador de requisições com resposta no formato padrão de erro.
@@ -74,6 +75,7 @@ export function createApp({ repositories = createMemoryRepositories(), config: o
   app.use('/api/shifts', guard, resources.shifts);
   app.use('/api/absences', guard, resources.absences);
   app.use('/api/schedules', guard, scheduleRoutes(deps));
+  app.use('/api/users', guard, userRoutes(deps));
 
   app.use(notFoundHandler);
   app.use(errorHandler(config));

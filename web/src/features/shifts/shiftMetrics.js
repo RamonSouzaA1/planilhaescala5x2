@@ -1,10 +1,35 @@
 import {
+  getLegalWeeklyCap,
   getRequiredBreakMinutes,
   getShiftLegalMinutes,
   getShiftNightMinutes,
   getShiftWindow,
   getShiftWorkMinutes,
+  LEGAL_WEEKLY_CAP_STEPS,
 } from '@escala/shared/utils/cltValidator.js';
+
+/** Hoje (data local do dispositivo) como 'YYYY-MM-DD'. */
+export function todayLocalDate() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+/** 'YYYY-MM-DD' → 'DD/MM/AAAA'. */
+const toBR = (date) => date.split('-').reverse().join('/');
+
+/**
+ * Texto do teto legal semanal vigente na data e da próxima etapa (EC 141/2026).
+ * @param {string} date - 'YYYY-MM-DD'
+ * @returns {string}
+ */
+export function describeLegalWeeklyCap(date) {
+  const cap = getLegalWeeklyCap(date);
+  const period = cap.from && cap.until ? `de ${toBR(cap.from)} a ${toBR(cap.until)}` : cap.from ? `desde ${toBR(cap.from)}` : `até ${toBR(cap.until)}`;
+  const next = LEGAL_WEEKLY_CAP_STEPS.find((step) => step.from > date);
+  const nextText = next ? ` Próxima etapa: ${next.hours}h a partir de ${toBR(next.from)}.` : '';
+  return `Teto legal vigente: ${cap.hours}h semanais (${period}).${nextText} Base: EC 141/2026.`;
+}
 
 const TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
 

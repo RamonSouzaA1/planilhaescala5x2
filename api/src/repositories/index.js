@@ -18,7 +18,11 @@
  * @typedef {Object} Repositories
  * @property {{ register: (input: { organization: any, user: any }) => Promise<{ organization: any, user: any }> }} accounts
  * @property {{ get: (id: string) => Promise<any | null>, update: (id: string, patch: any) => Promise<any | null>, findByReferralCode: (code: string) => Promise<any | null> }} organizations
- * @property {{ findByEmail: (email: string) => Promise<any | null>, get: (id: string) => Promise<any | null> }} users
+ * @property {{
+ *   findByEmail: (email: string) => Promise<any | null>,
+ *   get: (id: string) => Promise<any | null>,
+ *   create: (orgId: string, data: { name: string, email: string, passwordHash: string, role: string, departmentIds?: string[] }) => Promise<any>,
+ * }} users - usuários trazem `departmentIds` (setores do SECTION_LEADER)
  * @property {Crud} departments
  * @property {Crud & { findByAccessToken: (token: string) => Promise<any | null> }} employees
  * @property {Crud} shifts
@@ -29,6 +33,7 @@
  *   findCycle: (orgId: string, departmentId: string, weekStartDate: string) => Promise<any | null>,
  *   listWeek: (orgId: string, departmentId: string, weekStartDate: string) => Promise<any[]>,
  *   listForEmployee: (orgId: string, employeeId: string, dates: string[]) => Promise<any[]>,
+ *   countByShift: (orgId: string, shiftId: string) => Promise<number>,
  *   saveWeek: (orgId: string, input: { departmentId: string, weekStartDate: string, cycleWeek: number, assignments: any[] }) => Promise<{ cycle: any, assignments: any[] }>,
  * }} schedules
  */

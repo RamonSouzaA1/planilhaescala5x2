@@ -22,6 +22,7 @@
  * @typedef {Object} OrganizationPlanInfo
  * @property {PlanType} [plan]
  * @property {string} [planExpiresAt] - ISO Date (obrigatório para TRANSITION_PASS)
+ * @property {'ACTIVE' | 'EXPIRED' | 'PAST_DUE' | 'CANCELED'} [subscriptionStatus]
  */
 
 /**
@@ -130,28 +131,36 @@ export function shouldShowWatermark(plan) {
   return !getPlanLimits(plan).allowCleanExport;
 }
 
+/** Situações da assinatura que suspendem os recursos pagos (o plano gravado é preservado). */
+export const INACTIVE_SUBSCRIPTION_STATUSES = Object.freeze(['EXPIRED', 'PAST_DUE', 'CANCELED']);
+
 /**
  * Indica se o Passe Transição da organização já expirou.
- * Só é verdadeiro para plan === 'TRANSITION_PASS' com planExpiresAt anterior a `now`.
+ * Verdadeiro para plan === 'TRANSITION_PASS' com planExpiresAt anterior a `now`, ausente ou
+ * inválido (passe sem data não pode valer para sempre).
  * @param {OrganizationPlanInfo} organization
  * @param {Date} [now=new Date()]
  * @returns {boolean}
  */
 export function isTransitionPassExpired(organization, now = new Date()) {
   if (!organization || organization.plan !== 'TRANSITION_PASS') return false;
-  if (!organization.planExpiresAt) return false;
-  return now > new Date(organization.planExpiresAt);
+  if (!organization.planExpiresAt) return true;
+  const expiresAt = new Date(organization.planExpiresAt);
+  if (Number.isNaN(expiresAt.getTime())) return true;
+  return now > expiresAt;
 }
 
 /**
- * Plano efetivo da organização (spec 6.4, item 3): se o Passe Transição expirou,
- * rebaixa para 'FREE'; plano ausente ou desconhecido também vira 'FREE'.
- * @param {OrganizationPlanInfo} organization
+ * Plano efetivo da organização (spec 6.4, item 3): rebaixa para 'FREE' quando o Passe
+ * Transição expirou (ou não tem data) e quando a assinatura está EXPIRED, PAST_DUE ou
+ * CANCELED; plano ausente ou desconhecido também vira 'FREE'.
+ * @param {OrganizationPlanInfo & { subscriptionStatus?: string }} organization
  * @param {Date} [now=new Date()]
  * @returns {PlanType}
  */
 export function getEffectivePlan(organization, now = new Date()) {
   if (isTransitionPassExpired(organization, now)) return 'FREE';
+  if (INACTIVE_SUBSCRIPTION_STATUSES.includes(organization?.subscriptionStatus)) return 'FREE';
   const plan = organization?.plan;
   return typeof plan === 'string' && Object.hasOwn(PLAN_LIMITS, plan) ? plan : 'FREE';
 }
