@@ -277,3 +277,27 @@ describe('Loja Exemplo', () => {
     expect(store().employees).toHaveLength(0);
   });
 });
+
+describe('marcador de onboarding', () => {
+  beforeEach(() => {
+    localStorage.clear();
+    store().resetAll();
+  });
+  it('começa pending, muda com setOnboarding e ignora valores inválidos', () => {
+    expect(store().onboarding).toBe('pending');
+    store().setOnboarding('skipped');
+    expect(store().onboarding).toBe('skipped');
+    store().setOnboarding('qualquer');
+    expect(store().onboarding).toBe('skipped');
+  });
+  it('não entra no histórico de desfazer e é persistido', () => {
+    store().setOnboarding('done');
+    expect(store().canUndo).toBe(false);
+    expect(JSON.parse(localStorage.getItem(STORAGE_KEY)).state.onboarding).toBe('done');
+  });
+  it('resetAll volta para pending', () => {
+    store().setOnboarding('done');
+    store().resetAll();
+    expect(store().onboarding).toBe('pending');
+  });
+});

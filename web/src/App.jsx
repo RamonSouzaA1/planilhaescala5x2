@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { CalendarDays, ChevronLeft, ChevronRight, Clock, Users } from 'lucide-react';
+import { CalendarDays, ChevronLeft, ChevronRight, Clock, Compass, Users } from 'lucide-react';
 import { useScheduleStore, getCurrentMonday } from './store/useScheduleStore.js';
 import { ScheduleView } from './features/grid/ScheduleView.jsx';
 import { formatWeekRange } from './features/grid/gridUtils.js';
@@ -7,6 +7,8 @@ import { TeamPanel } from './features/team/TeamPanel.jsx';
 import { DepartmentSettings } from './features/shifts/DepartmentSettings.jsx';
 import { ShiftsEditor } from './features/shifts/ShiftsEditor.jsx';
 import { CoverageEditor } from './features/shifts/CoverageEditor.jsx';
+import { OnboardingWizard } from './features/wizard/OnboardingWizard.jsx';
+import { EmptyScheduleState } from './features/wizard/EmptyScheduleState.jsx';
 
 const TABS = [
   { id: 'escala', label: 'Escala', Icon: CalendarDays },
@@ -28,6 +30,11 @@ export default function App() {
   const prevWeek = useScheduleStore((s) => s.prevWeek);
   const nextWeek = useScheduleStore((s) => s.nextWeek);
   const goToWeek = useScheduleStore((s) => s.goToWeek);
+  // Abre sozinho só na primeira visita: store vazio e guia ainda não visto nem pulado.
+  const [wizardOpen, setWizardOpen] = useState(() => {
+    const s = useScheduleStore.getState();
+    return s.onboarding === 'pending' && s.departments.length === 0;
+  });
 
   const onTabKeyDown = (e) => {
     const i = TABS.findIndex((t) => t.id === tab);
@@ -67,6 +74,15 @@ export default function App() {
               ))}
             </select>
           )}
+
+          <button
+            type="button"
+            onClick={() => setWizardOpen(true)}
+            className="inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-600"
+          >
+            <Compass size={16} aria-hidden="true" />
+            <span className="max-sm:sr-only">Guia de configuração</span>
+          </button>
 
           <div className="ml-auto flex items-center gap-1.5" role="group" aria-label="Navegação de semana">
             <button type="button" className={navBtn} onClick={prevWeek} aria-label="Semana anterior">
@@ -123,7 +139,7 @@ export default function App() {
 
       <main className="mx-auto max-w-[110rem] px-3 pb-24 pt-3 sm:px-6 sm:pb-6">
         <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`} tabIndex={-1} className="focus:outline-none">
-          {tab === 'escala' && <ScheduleView />}
+          {tab === 'escala' && (departments.length === 0 ? <EmptyScheduleState onStartGuide={() => setWizardOpen(true)} /> : <ScheduleView />)}
           {tab === 'equipe' && <TeamPanel />}
           {tab === 'turnos' && (
             <div className="mx-auto flex max-w-4xl flex-col gap-4">
@@ -134,6 +150,16 @@ export default function App() {
           )}
         </div>
       </main>
+
+      {wizardOpen && (
+        <OnboardingWizard
+          onClose={() => setWizardOpen(false)}
+          onViewSchedule={() => {
+            setTab('escala');
+            setWizardOpen(false);
+          }}
+        />
+      )}
     </div>
   );
 }

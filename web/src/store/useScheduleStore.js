@@ -14,6 +14,8 @@ import { createSampleDocument } from './sampleStore.js';
 export const STORAGE_KEY = 'planilha-escala-5x2:v1';
 export const STORAGE_VERSION = 1;
 export const HISTORY_LIMIT = 50;
+/** Estados do guia de primeiro uso: ainda não visto, concluído ou pulado. */
+export const ONBOARDING_STATUSES = ['pending', 'done', 'skipped'];
 
 /** Campos do "documento": é o que entra nos snapshots de desfazer e no localStorage. */
 export const DOCUMENT_KEYS = [
@@ -113,6 +115,7 @@ function createInitialState() {
   return {
     ...createEmptyDocument(),
     currentWeekStart: getCurrentMonday(),
+    onboarding: 'pending',
     past: [],
     future: [],
     canUndo: false,
@@ -446,6 +449,10 @@ export const useScheduleStore = create()(
         nextWeek: () => set((s) => ({ currentWeekStart: addDays(s.currentWeekStart, 7) })),
         prevWeek: () => set((s) => ({ currentWeekStart: addDays(s.currentWeekStart, -7) })),
 
+        // ------------------------------------------------------------ guia de primeiro uso (fora do histórico)
+        /** @param {'pending' | 'done' | 'skipped'} status */
+        setOnboarding: (status) => set((s) => (ONBOARDING_STATUSES.includes(status) ? { onboarding: status } : s)),
+
         // ------------------------------------------------------------ dados
         /** Substitui o documento pela Loja Exemplo (pode ser desfeito). */
         loadSampleStore: () => commit(() => createSampleDocument()),
@@ -458,12 +465,13 @@ export const useScheduleStore = create()(
       version: STORAGE_VERSION,
       storage: createJSONStorage(() => localStorage),
       // Persiste só o documento e a semana atual; past/future ficam de fora.
-      partialize: (state) => ({ ...pickDocument(state), currentWeekStart: state.currentWeekStart }),
+      partialize: (state) => ({ ...pickDocument(state), currentWeekStart: state.currentWeekStart, onboarding: state.onboarding }),
       // Garante que currentWeekStart vindo do localStorage seja sempre uma segunda-feira válida.
       merge: (persisted, current) => {
         const saved = persisted && typeof persisted === 'object' ? persisted : {};
         const week = /^\d{4}-\d{2}-\d{2}$/.test(saved.currentWeekStart ?? '') ? getMonday(saved.currentWeekStart) : current.currentWeekStart;
-        return { ...current, ...saved, currentWeekStart: week };
+        const onboarding = ONBOARDING_STATUSES.includes(saved.onboarding) ? saved.onboarding : current.onboarding;
+        return { ...current, ...saved, currentWeekStart: week, onboarding };
       },
     },
   ),

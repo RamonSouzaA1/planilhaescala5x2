@@ -9,6 +9,7 @@ const store = () => useScheduleStore.getState();
 beforeEach(() => {
   localStorage.clear();
   store().resetAll();
+  store().setOnboarding('skipped');
   store().goToWeek('2026-11-16');
 });
 
@@ -20,7 +21,7 @@ describe('App', () => {
 
   it('fluxo completo: estado vazio -> loja exemplo -> gerar escala -> selo verde', () => {
     render(<App />);
-    expect(screen.getByText('Nenhum setor ativo')).toBeInTheDocument();
+    expect(screen.getByText('Vamos montar sua escala')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /Carregar Loja Exemplo/ }));
     expect(store().employees).toHaveLength(26);
     expect(screen.getByRole('combobox', { name: 'Trocar setor' })).toHaveDisplayValue('Açougue');
@@ -31,9 +32,9 @@ describe('App', () => {
     expect(screen.getAllByRole('rowheader').length).toBeGreaterThan(10);
   });
 
-  it('"Começar do zero" cria um setor', () => {
+  it('"Pular guia" cria um setor vazio', () => {
     render(<App />);
-    fireEvent.click(screen.getByRole('button', { name: 'Começar do zero' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Pular guia' }));
     expect(store().departments).toHaveLength(1);
     expect(screen.getByRole('combobox', { name: 'Trocar setor' })).toHaveDisplayValue('Meu Setor');
   });
