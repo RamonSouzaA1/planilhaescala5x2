@@ -532,7 +532,9 @@ describe('carga horária semanal', () => {
       assignments: week('ana', ['NIGHT9', 'O', 'NIGHT9', 'NIGHT9', 'NIGHT9', 'NIGHT9', 'O']),
     });
     const issue = result.issues.find((i) => i.code === ISSUE_CODES.WEEKLY_HOURS);
-    expect(issue?.details.workedMinutes).toBe(45 * 60); // 8h de relógio + 1h por hora noturna reduzida
+    // 21:00–06:00 cobre toda a faixa 22h–05h, então 05h–06h também é noturna (Súmula 60, II):
+    // 8h de relógio + 480 min noturnos / 7 = 480 + 69 = 549 min por dia, 5 dias = 45h45.
+    expect(issue?.details.workedMinutes).toBe(5 * 549);
   });
 
   it('meta enviada como texto ("40") continua valendo', () => {

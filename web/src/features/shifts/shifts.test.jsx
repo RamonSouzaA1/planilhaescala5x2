@@ -154,7 +154,9 @@ describe('ShiftsEditor', () => {
     expect(shift.isNightShift).toBe(true);
     const list = screen.getByRole('list', { name: 'Lista de turnos' });
     expect(within(list).getByText('Relógio: 8h/dia')).toBeInTheDocument();
-    expect(within(list).getByText('Legal: 9h/dia')).toBeInTheDocument();
+    // Cobre toda a faixa 22h–05h, então 05h–06h também é noturna (Súmula 60, II, TST):
+    // 480 min de relógio + 480 noturnos / 7 = 549 min.
+    expect(within(list).getByText('Legal: 9h09/dia')).toBeInTheDocument();
     expect(within(list).getByText('Noturno')).toBeInTheDocument();
   });
 

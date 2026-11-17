@@ -259,8 +259,12 @@ describe('travas, ausências e restrições', () => {
   });
 
   it('respeita dias e turnos indisponíveis', () => {
+    // Grupo que trabalha neste domingo: o rodízio vale mais que a restrição individual e,
+    // num grupo de folga, o domingo ocuparia uma das duas folgas.
     const employees = team(5, (i) =>
-      i === 0 ? { fixedConstraints: { unavailableDays: ['TER', 'QUI'], unavailableShiftIds: ['T3'] } } : {},
+      i === 0
+        ? { sundayGroup: WORK_GROUP, fixedConstraints: { unavailableDays: ['TER', 'QUI'], unavailableShiftIds: ['T3'] } }
+        : {},
     );
     const result = gen({ employees });
     const cells = cellsOf(result, 'e0');

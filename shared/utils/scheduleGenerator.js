@@ -1,13 +1,15 @@
 /**
  * Motor gerador 5x2 (spec, módulo 3). Algoritmo determinístico em 4 etapas:
- *   1. Travas e ausências: células isPinned, férias/atestados e dias indisponíveis são fixados.
- *   2. Domingos: folga obrigatória quando os dois domingos anteriores foram trabalhados
- *      (Lei 10.101/2000, art. 6º; tem prioridade sobre dias indisponíveis), aplica o rodízio
- *      (1 em 3 / 1 em 2) e considera a sequência de dias trabalhados no fim da semana anterior
- *      e no início da semana seguinte já gravada (OJ 410 SDI-1/TST: no máximo 6 seguidos).
- *   3. Folgas: escolhe as folgas restantes por custo — preferência de segunda a quarta,
- *      proteção de sexta a domingo e dos dias de pico, espalhamento entre os dias e
- *      penalidades para furo de cobertura mínima e de tags obrigatórias.
+ *   1. Travas e ausências: células isPinned e férias/atestados são fixados.
+ *   2. Restrições de cada colaborador: sequência de dias trabalhados no fim da semana anterior
+ *      e no início da semana seguinte já gravada (OJ 410 SDI-1/TST: no máximo 6 seguidos),
+ *      folga obrigatória no domingo quando os dois anteriores foram trabalhados
+ *      (Lei 10.101/2000, art. 6º), domingo do rodízio (1 em 3 / 1 em 2) e dias indisponíveis.
+ *   3. Folgas: todas as combinações de folgas nos dias livres são comparadas em ordem de
+ *      prioridade — lei (OJ 410 e terceiro domingo) > rodízio > restrição individual > custo.
+ *      Quando não cabe tudo, cedem o rodízio ou a restrição (alerta amarelo), nunca a lei.
+ *      O custo prefere folgas de segunda a quarta, protege sexta a domingo e os dias de pico,
+ *      espalha as folgas e penaliza furo de cobertura mínima e de tags obrigatórias.
  *   4. Turnos: cada colaborador recebe um turno-base da semana (o da semana anterior ou
  *      um balanceado por tags e carga) e o turno do dia só muda para manter o descanso
  *      mínimo (11h entre dias seguidos; 35h quando há folga no meio) ou para caber no limite
@@ -38,7 +40,6 @@ const SPREAD_WEIGHT = 30;
 const PEAK_DATE_COST = 15;
 const COVERAGE_PENALTY = 1000;
 const TAG_PENALTY = 500;
-const CONSECUTIVE_PENALTY = 10000;
 const REFINEMENT_PASSES = 2;
 
 /**
@@ -158,7 +159,7 @@ export function generateSchedule({
     .map((a) => ({ ...a, date: toDateKey(a.date) }))
     .filter((a) => nextDates.includes(a.date));
 
-  // Etapa 1 e 2: células fixas (travas, ausências, indisponibilidade, domingo do rodízio).
+  // Etapa 1: células fixas (travas e ausências). Etapa 2: o que cada folga precisa respeitar.
   const plans = active.map((employee, order) => {
     const absenceMap = getEmployeeAbsences(employee, absences, dates);
     const cells = dates.map((date) => {
@@ -175,40 +176,23 @@ export function generateSchedule({
     const totalOff = hasVacation
       ? 7 - absenceCount - Math.min(WORK_DAYS_PER_WEEK, 7 - absenceCount)
       : Math.min(OFF_DAYS_PER_WEEK, 7 - absenceCount);
-    const offBudget = () => totalOff - cells.filter((c) => c?.type === 'OFF').length;
-
-    // Terceiro domingo seguido é infração (Lei 10.101/2000): folga antes das preferências.
-    if (!cells[6] && offBudget() > 0 && workedLastTwoSundays([...earlier, ...previous], employee.id, weekStartDate)) {
-      cells[6] = { type: 'OFF', isPinned: false, fixed: true };
-    }
-
-    // Dias indisponíveis viram folga enquanto houver folgas a distribuir.
-    const unavailableDays = employee.fixedConstraints?.unavailableDays ?? [];
-    dates.forEach((date, i) => {
-      if (!cells[i] && unavailableDays.includes(getDayOfWeek(date)) && offBudget() > 0) {
-        cells[i] = { type: 'OFF', isPinned: false, fixed: true };
-      }
-    });
-
-    // Domingo de folga pelo rodízio.
-    const rule = resolveSundayRule(employee, department);
-    if (
-      !cells[6] &&
-      offBudget() > 0 &&
-      isSundayOffWeek(employee.sundayGroup, rule, weekStartDate, cycleOffset) === true
-    ) {
-      cells[6] = { type: 'OFF', isPinned: false, fixed: true };
-    }
-
+    const offBudget = totalOff - cells.filter((c) => c?.type === 'OFF').length;
     const free = cells.flatMap((c, i) => (c ? [] : [i]));
+    const unavailableDays = employee.fixedConstraints?.unavailableDays ?? [];
+    const rule = resolveSundayRule(employee, department);
+
     return {
       employee,
       order,
       cells,
       free,
-      offNeeded: Math.max(0, Math.min(offBudget(), free.length)),
+      offNeeded: Math.max(0, Math.min(offBudget, free.length)),
       trailing: getTrailingWorkStreak(previous, employee.id, weekStartDate),
       leading: getLeadingWorkStreak(next, employee.id, weekStartDate),
+      // Terceiro domingo seguido é infração (Lei 10.101/2000, art. 6º).
+      sundayLaw: workedLastTwoSundays([...earlier, ...previous], employee.id, weekStartDate),
+      rotationSundayOff: isSundayOffWeek(employee.sundayGroup, rule, weekStartDate, cycleOffset) === true,
+      unavailable: free.filter((d) => unavailableDays.includes(getDayOfWeek(dates[d]))),
       tags: (employee.tags ?? []).filter((t) => coverageTags.includes(t)),
       offs: [],
     };
@@ -245,30 +229,58 @@ export function generateSchedule({
     return cost;
   };
 
-  const breaksConsecutiveLimit = (plan, offs) => {
+  const isWorkDay = (plan, offs, d) => (plan.cells[d]?.type ?? (offs.includes(d) ? 'OFF' : 'WORK')) === 'WORK';
+
+  /**
+   * Dias que passam do 6º seguido (OJ 410), contando a sequência herdada da semana anterior e
+   * a que continua na semana seguinte já gravada. Zero quando a escolha respeita a regra.
+   */
+  const consecutiveExcess = (plan, offs) => {
     let run = plan.trailing;
+    let excess = 0;
     for (let d = 0; d < 7; d += 1) {
-      const type = plan.cells[d]?.type ?? (offs.includes(d) ? 'OFF' : 'WORK');
-      run = type === 'WORK' ? run + 1 : 0;
-      if (run > MAX_CONSECUTIVE_WORK_DAYS) return true;
+      run = isWorkDay(plan, offs, d) ? run + 1 : 0;
+      if (run > MAX_CONSECUTIVE_WORK_DAYS) excess += 1;
     }
-    // Sequência que continua na semana seguinte já gravada.
-    return run > 0 && plan.leading > 0 && run + plan.leading > MAX_CONSECUTIVE_WORK_DAYS;
+    if (run === 0) return excess;
+    for (let j = 1; j <= plan.leading; j += 1) if (run + j > MAX_CONSECUTIVE_WORK_DAYS) excess += 1;
+    return excess;
+  };
+
+  /**
+   * Custo da escolha em ordem de prioridade, comparado posição a posição:
+   * [lei (OJ 410 e terceiro domingo), rodízio de domingo, restrições individuais, preferência].
+   * O 5x2 já vem garantido pelo número de folgas e as horas, pela etapa 4. Assim, quando nem
+   * tudo cabe, cedem o rodízio ou a restrição (alerta amarelo), nunca a regra legal.
+   */
+  const offsScore = (plan, offs) => {
+    const sundayWorked = isWorkDay(plan, offs, 6);
+    return [
+      consecutiveExcess(plan, offs) + (plan.sundayLaw && sundayWorked ? 1 : 0),
+      plan.rotationSundayOff && sundayWorked ? 1 : 0,
+      plan.unavailable.filter((d) => !offs.includes(d)).length,
+      offs.reduce((sum, d) => sum + dayCost(plan, d), 0),
+    ];
+  };
+  const isBetter = (a, b) => {
+    for (let i = 0; i < a.length; i += 1) if (a[i] !== b[i]) return a[i] < b[i];
+    return false;
   };
 
   const chooseOffs = (plan) => {
     let best = null;
     for (const offs of combinations(plan.free, plan.offNeeded)) {
-      let cost = offs.reduce((sum, d) => sum + dayCost(plan, d), 0);
-      if (breaksConsecutiveLimit(plan, offs)) cost += CONSECUTIVE_PENALTY;
-      if (!best || cost < best.cost) best = { offs, cost };
+      const score = offsScore(plan, offs);
+      if (!best || isBetter(score, best.score)) best = { offs, score };
     }
     return best.offs;
   };
 
-  // Mais restritos primeiro: maior sequência herdada, mais células fixas.
+  // Mais restritos primeiro: maior sequência herdada, mais preferências a encaixar, menos dias livres.
+  const rigidity = (plan) => Number(plan.sundayLaw) + Number(plan.rotationSundayOff) + plan.unavailable.length;
   const queue = [...plans].sort(
-    (a, b) => b.trailing - a.trailing || a.free.length - b.free.length || a.order - b.order,
+    (a, b) =>
+      b.trailing - a.trailing || rigidity(b) - rigidity(a) || a.free.length - b.free.length || a.order - b.order,
   );
   for (let pass = 0; pass <= REFINEMENT_PASSES; pass += 1) {
     for (const plan of queue) {

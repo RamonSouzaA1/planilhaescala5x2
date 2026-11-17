@@ -10,7 +10,8 @@
  *   - descanso e sequência de dias também na virada para a semana seguinte, quando informada;
  *   - semana fora do 5x2 e carga semanal acima do menor valor entre a meta do setor e o teto
  *     legal da data (EC 141/2026: 44h → 42h → 40h), contando a hora noturna reduzida
- *     (art. 73 CLT, 22h–05h);
+ *     (art. 73 CLT, 22h–05h, e a prorrogação após as 05h de quem cobre toda a faixa,
+ *     Súmula 60, II, TST);
  *   - terceiro domingo seguido de trabalho (Lei 10.101/2000, art. 6º), quando o histórico
  *     das duas semanas anteriores foi informado;
  *   - escala em dia de férias/atestado.
@@ -68,6 +69,9 @@ const NIGHT_RANGES = [
   [22 * 60, 29 * 60],
   [46 * 60, 53 * 60],
 ];
+/** Faixa noturna que começa no dia de início do turno (22h → 05h do dia seguinte). */
+const NIGHT_START = 22 * 60;
+const NIGHT_END = 29 * 60;
 
 /**
  * @typedef {Object} Issue
@@ -114,19 +118,36 @@ export function getShiftWorkMinutes(shift) {
 }
 
 /**
- * Minutos de relógio do turno dentro da faixa noturna (22h–05h).
+ * Minutos de relógio após as 05h que também são noturnos pela prorrogação (Súmula 60, II, TST):
+ * só quando o turno cobre integralmente a faixa 22h–05h (começa até as 22h e termina às 05h
+ * ou depois). Turnos que não cobrem toda a faixa não têm prorrogação.
+ * @param {{ startTime: string, endTime: string }} shift
+ * @returns {number}
+ */
+export function getShiftProrogatedNightMinutes(shift) {
+  const { start, end } = getShiftWindow(shift);
+  return start <= NIGHT_START && end > NIGHT_END ? end - NIGHT_END : 0;
+}
+
+/**
+ * Minutos de relógio noturnos do turno: os da faixa 22h–05h (art. 73 §2º CLT) mais os
+ * prorrogados após as 05h quando o turno cobre toda a faixa (Súmula 60, II, TST).
  * @param {{ startTime: string, endTime: string }} shift
  * @returns {number}
  */
 export function getShiftNightMinutes(shift) {
   const { start, end } = getShiftWindow(shift);
-  return NIGHT_RANGES.reduce((sum, [a, b]) => sum + Math.max(0, Math.min(end, b) - Math.max(start, a)), 0);
+  const inRange = NIGHT_RANGES.reduce((sum, [a, b]) => sum + Math.max(0, Math.min(end, b) - Math.max(start, a)), 0);
+  return inRange + getShiftProrogatedNightMinutes(shift);
 }
 
 /**
  * Duração legal do turno: a hora noturna tem 52min30s (art. 73 §1º CLT), então cada
- * minuto noturno vale 60/52,5 = 8/7 de minuto. O intervalo é descontado como hora diurna
- * (aproximação conservadora, pois não se sabe em que horário ele é tirado).
+ * minuto noturno vale 60/52,5 = 8/7 de minuto (acréscimo de 1/7). Os minutos noturnos incluem
+ * a prorrogação após as 05h (Súmula 60, II, TST). O acréscimo é arredondado ao minuto mais
+ * próximo uma vez por turno (a carga semanal soma os turnos já arredondados). O intervalo é
+ * descontado como hora diurna (aproximação conservadora, pois não se sabe em que horário ele é
+ * tirado): num turno todo noturno, isso pode somar até intervalo/7 minutos a mais.
  * @param {{ startTime: string, endTime: string, breakDurationMinutes?: number }} shift
  * @returns {number}
  */
@@ -541,13 +562,17 @@ export function validateSchedule({
         });
       }
       if (legalMinutes > MAX_DAILY_WORK_MINUTES) {
+        const prorogatedNightMinutes = getShiftProrogatedNightMinutes(shift);
+        const nightNote = prorogatedNightMinutes
+          ? `, com hora noturna reduzida inclusive após as 05h, Súmula 60, II, TST`
+          : '';
         push({
           code: ISSUE_CODES.DAILY_HOURS,
           severity: SEVERITY.RED,
           employeeId: employee.id,
           date,
-          message: `${employee.name}: jornada de ${formatDuration(legalMinutes)} em ${formatDateBR(date)} (máximo 10h com horas extras).`,
-          details: { legalMinutes, shiftId: shift.id },
+          message: `${employee.name}: jornada de ${formatDuration(legalMinutes)} em ${formatDateBR(date)} (máximo 10h com horas extras${nightNote}).`,
+          details: { legalMinutes, prorogatedNightMinutes, shiftId: shift.id },
         });
       }
     }
