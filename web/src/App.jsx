@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { CalendarDays, Clock, Compass, Users } from 'lucide-react';
+import { CalendarDays, Clock, Compass, ShieldCheck, Users } from 'lucide-react';
 import { useScheduleStore } from './store/useScheduleStore.js';
 import { ScheduleView } from './features/grid/ScheduleView.jsx';
 import { PeriodNav } from './features/grid/PeriodNav.jsx';
@@ -9,6 +9,7 @@ import { ShiftsEditor } from './features/shifts/ShiftsEditor.jsx';
 import { CoverageEditor } from './features/shifts/CoverageEditor.jsx';
 import { OnboardingWizard } from './features/wizard/OnboardingWizard.jsx';
 import { EmptyScheduleState } from './features/wizard/EmptyScheduleState.jsx';
+import { PrivacyModal } from './features/privacy/PrivacyModal.jsx';
 
 const TABS = [
   { id: 'escala', label: 'Escala', Icon: CalendarDays },
@@ -19,6 +20,7 @@ const TABS = [
 /** Casca do aplicativo: cabeçalho (setor e semana), abas (barra inferior no celular) e a área ativa. */
 export default function App() {
   const [tab, setTab] = useState('escala');
+  const [privacyOpen, setPrivacyOpen] = useState(false);
   const tabRefs = useRef({});
   const departments = useScheduleStore((s) => s.departments);
   const activeDepartmentId = useScheduleStore((s) => s.activeDepartmentId);
@@ -113,7 +115,7 @@ export default function App() {
         </nav>
       </header>
 
-      <main className="mx-auto max-w-[110rem] px-3 pb-24 pt-3 sm:px-6 sm:pb-6">
+      <main className="mx-auto max-w-[110rem] px-3 pb-4 pt-3 sm:px-6">
         <div role="tabpanel" id={`panel-${tab}`} aria-labelledby={`tab-${tab}`} tabIndex={-1} className="focus:outline-none">
           {tab === 'escala' && (departments.length === 0 ? <EmptyScheduleState onStartGuide={() => setWizardOpen(true)} /> : <ScheduleView />)}
           {tab === 'equipe' && <TeamPanel />}
@@ -126,6 +128,19 @@ export default function App() {
           )}
         </div>
       </main>
+
+      <footer className="mx-auto max-w-[110rem] px-3 pb-24 text-xs text-slate-600 sm:px-6 sm:pb-6">
+        <button
+          type="button"
+          onClick={() => setPrivacyOpen(true)}
+          className="inline-flex items-center gap-1 rounded-md px-1 py-1 underline hover:text-slate-900 focus-visible:outline-2 focus-visible:outline-emerald-600"
+        >
+          <ShieldCheck size={14} aria-hidden="true" />
+          Privacidade
+        </button>
+      </footer>
+
+      {privacyOpen && <PrivacyModal onClose={() => setPrivacyOpen(false)} />}
 
       {wizardOpen && (
         <OnboardingWizard

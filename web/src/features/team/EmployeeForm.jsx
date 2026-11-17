@@ -1,6 +1,7 @@
 import { useId, useMemo, useState } from 'react';
 import { Plus, X } from 'lucide-react';
 import { useScheduleStore } from '../../store/useScheduleStore.js';
+import { classifyPhone } from '../../store/parseEmployeeList.js';
 import { Modal, btnPrimary, btnSecondary, inputCls } from './Modal.jsx';
 
 const DAYS = [
@@ -56,8 +57,10 @@ export function EmployeeForm({ employee, onClose, onSaved }) {
     event.preventDefault();
     const next = {};
     if (!name.trim()) next.name = 'Informe o nome do funcionário.';
-    const digits = phone.replace(/\D/g, '');
-    if (phone.trim() && (digits.length < 10 || digits.length > 13)) {
+    const phoneStatus = classifyPhone(phone);
+    if (phoneStatus === 'cpf') {
+      next.phone = 'Isso parece um CPF. Não precisamos de CPF: informe só o telefone com DDD, por exemplo (11) 91234-5678.';
+    } else if (phoneStatus === 'invalid') {
       next.phone = 'Telefone inválido. Use DDD + número, por exemplo (11) 91234-5678.';
     }
     setErrors(next);
@@ -144,7 +147,7 @@ export function EmployeeForm({ employee, onClose, onSaved }) {
               aria-describedby={`${id('phone-hint')}${errors.phone ? ` ${id('phone-err')}` : ''}`}
             />
             <p id={id('phone-hint')} className="mt-1 text-xs text-slate-600">
-              Usado só para enviar a escala (LGPD).
+              Opcional. Usado só para enviar a escala pelo WhatsApp.
             </p>
             {errors.phone && (
               <p id={id('phone-err')} role="alert" className="mt-1 text-xs font-medium text-rose-700">

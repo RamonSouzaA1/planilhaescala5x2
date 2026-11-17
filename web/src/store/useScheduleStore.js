@@ -4,7 +4,7 @@
  */
 
 import { create } from 'zustand';
-import { persist, createJSONStorage } from 'zustand/middleware';
+import { persist } from 'zustand/middleware';
 import { addDays, getDayOfWeek } from '@escala/shared/utils/dateUtils.js';
 import { DAYS_OF_WEEK } from '@escala/shared/models/schemas.js';
 import { generateSchedule } from '@escala/shared/utils/scheduleGenerator.js';
@@ -17,6 +17,8 @@ import {
 } from '@escala/shared/utils/monthSchedule.js';
 import { assignSundayGroups } from '@escala/shared/utils/sundayRotation.js';
 import { createSampleDocument } from './sampleStore.js';
+import { sanitizeDocument } from './sanitizeDocument.js';
+import { CORRUPTED_BACKUP_KEY, buildExportJson, removeAppKeys } from '../features/privacy/localData.js';
 
 export const STORAGE_KEY = 'planilha-escala-5x2:v1';
 export const STORAGE_VERSION = 1;
@@ -194,6 +196,51 @@ function createInitialState() {
     canRedo: false,
   };
 }
+
+/** Guarda o conteúdo ilegível/inválido numa chave à parte, para o usuário ainda poder exportá-lo. */
+function backupCorrupted(raw) {
+  try {
+    localStorage.setItem(CORRUPTED_BACKUP_KEY, typeof raw === 'string' ? raw : JSON.stringify(raw));
+  } catch (error) {
+    console.error('Não foi possível guardar a cópia dos dados corrompidos', error);
+  }
+}
+
+/** Storage do persist que nunca lança: JSON corrompido vira "sem dados" (com cópia de segurança). */
+const safeStorage = {
+  getItem: (name) => {
+    let raw = null;
+    try {
+      raw = localStorage.getItem(name);
+    } catch {
+      return null;
+    }
+    if (raw === null) return null;
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') return parsed;
+    } catch {
+      // cai no tratamento abaixo
+    }
+    console.error('Dados salvos ilegíveis; abrindo em estado seguro.');
+    backupCorrupted(raw);
+    return null;
+  },
+  setItem: (name, value) => {
+    try {
+      localStorage.setItem(name, JSON.stringify(value));
+    } catch (error) {
+      console.error('Não foi possível salvar neste navegador', error);
+    }
+  },
+  removeItem: (name) => {
+    try {
+      localStorage.removeItem(name);
+    } catch (error) {
+      console.error('Não foi possível remover dados deste navegador', error);
+    }
+  },
+};
 
 export const useScheduleStore = create()(
   persist(
@@ -558,12 +605,25 @@ export const useScheduleStore = create()(
         loadSampleStore: () => commit(() => createSampleDocument()),
         /** Volta ao estado inicial vazio e limpa o histórico. */
         resetAll: () => set(createInitialState()),
+
+        // ------------------------------------------------------------ privacidade (LGPD)
+        /** @returns {string} JSON com tudo que o app guarda neste navegador (para download) */
+        exportLocalData: () => {
+          const state = get();
+          return buildExportJson({ currentState: { ...pickDocument(state), onboarding: state.onboarding } });
+        },
+        /** Apaga todos os dados do app no navegador e volta ao estado inicial (onboarding 'pending'). */
+        wipeLocalData: () => {
+          // Primeiro zera o store (o persist regrava a chave) e só depois limpa o localStorage.
+          set(createInitialState());
+          removeAppKeys();
+        },
       };
     },
     {
       name: STORAGE_KEY,
       version: STORAGE_VERSION,
-      storage: createJSONStorage(() => localStorage),
+      storage: safeStorage,
       // Persiste o documento, a navegação (semana, mês, modo) e o guia; past/future ficam de fora.
       partialize: (state) => ({
         ...pickDocument(state),
@@ -576,12 +636,15 @@ export const useScheduleStore = create()(
       // tocado por essa semana (senão, o mês da semana) e que viewMode seja conhecido.
       merge: (persisted, current) => {
         const saved = persisted && typeof persisted === 'object' ? persisted : {};
+        // Dado corrompido/inválido é descartado em vez de quebrar a tela.
+        const { document, discarded } = sanitizeDocument(saved);
+        if (discarded) backupCorrupted(saved);
         const week = DATE_PATTERN.test(saved.currentWeekStart ?? '') ? getMonday(saved.currentWeekStart) : current.currentWeekStart;
         const monthFits = isMonthKey(saved.currentMonth) && getMonthWeeks(saved.currentMonth).includes(week);
         const currentMonth = monthFits ? saved.currentMonth : getMonthKey(week);
         const viewMode = VIEW_MODES.includes(saved.viewMode) ? saved.viewMode : DEFAULT_VIEW_MODE;
         const onboarding = ONBOARDING_STATUSES.includes(saved.onboarding) ? saved.onboarding : current.onboarding;
-        return { ...current, ...saved, currentWeekStart: week, currentMonth, viewMode, onboarding };
+        return { ...current, ...document, currentWeekStart: week, currentMonth, viewMode, onboarding };
       },
     },
   ),

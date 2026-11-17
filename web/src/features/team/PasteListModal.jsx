@@ -1,6 +1,6 @@
 import { useId, useMemo, useState } from 'react';
 import { useScheduleStore } from '../../store/useScheduleStore.js';
-import { parseEmployeeList } from '../../store/parseEmployeeList.js';
+import { parseEmployeeListDetailed } from '../../store/parseEmployeeList.js';
 import { Modal, btnPrimary, btnSecondary, inputCls } from './Modal.jsx';
 
 /**
@@ -10,7 +10,7 @@ import { Modal, btnPrimary, btnSecondary, inputCls } from './Modal.jsx';
 export function PasteListModal({ onClose }) {
   const uid = useId();
   const [text, setText] = useState('');
-  const people = useMemo(() => parseEmployeeList(text), [text]);
+  const { people, ignoredCpfCount } = useMemo(() => parseEmployeeListDetailed(text), [text]);
 
   const confirm = () => {
     if (!people.length) return;
@@ -50,6 +50,13 @@ export function PasteListModal({ onClose }) {
           ? 'Nenhuma pessoa reconhecida ainda.'
           : `${people.length} ${people.length === 1 ? 'pessoa reconhecida' : 'pessoas reconhecidas'}`}
       </p>
+      {ignoredCpfCount > 0 && (
+        <p role="status" data-testid="cpf-warning" className="mt-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-900">
+          {ignoredCpfCount === 1
+            ? 'Ignoramos 1 número que parece CPF — não precisamos dele.'
+            : `Ignoramos ${ignoredCpfCount} números que parecem CPF — não precisamos deles.`}
+        </p>
+      )}
       {people.length > 0 && (
         <ul aria-label="Pré-visualização" className="mt-2 max-h-48 divide-y divide-slate-100 overflow-y-auto rounded-lg border border-slate-200">
           {people.slice(0, 100).map((p, i) => (
