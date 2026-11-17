@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { randomBytes } from 'node:crypto';
 import { canAddDepartment, canUseFeature } from '@escala/shared/utils/planPermissions.js';
+import { recordAudit } from '../audit.js';
 import { todayInBrazil } from '../dates.js';
 import { AppError, badRequest, found, sendOk } from '../errors.js';
 import { assertDepartmentScope, MANAGER_ROLES, requireRole, WRITE_ROLES } from '../middleware/auth.js';
@@ -61,8 +62,7 @@ export function resourceRoutes({ repositories, config }) {
     }
     return req.departmentScope ? { departmentId: { in: [...req.departmentScope] } } : {};
   };
-  const audit = (req, departmentId, action, details) =>
-    auditLogs.create(req.orgId, { departmentId, userId: req.user.id, action, details, ip: req.ip, timestamp: new Date().toISOString() });
+  const audit = (req, departmentId, action, details) => recordAudit(auditLogs, req, { departmentId, action, details });
 
   // ---- Departamentos ----
   const departmentRouter = Router();

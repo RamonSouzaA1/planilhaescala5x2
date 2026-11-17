@@ -2,16 +2,17 @@ import { Router } from 'express';
 import { validateSchedule } from '@escala/shared/utils/cltValidator.js';
 import { addDays, getCycleWeek, getDayOfWeek, getWeekDates } from '@escala/shared/utils/dateUtils.js';
 import { generateSchedule } from '@escala/shared/utils/scheduleGenerator.js';
+import { recordAudit } from '../audit.js';
 import { AppError, badRequest, found, sendOk } from '../errors.js';
 import { assertDepartmentScope, requireRole, WRITE_ROLES } from '../middleware/auth.js';
-import { scheduleGenerateSchema, scheduleQuerySchema, scheduleSaveSchema } from '../schemas.js';
+import { scheduleGenerateSchema, schedulePublishSchema, scheduleQuerySchema, scheduleSaveSchema } from '../schemas.js';
 
 /**
  * Rotas `/api/schedules`: leitura da semana com validação CLT, gravação e geração no servidor.
  * @param {{ repositories: import('../repositories/index.js').Repositories }} deps
  * @returns {import('express').Router}
  */
-export function scheduleRoutes({ repositories }) {
+export function scheduleRoutes({ repositories, config = { now: () => new Date() } }) {
   const router = Router();
   const { departments, employees, shifts, absences, coverageRules, schedules, auditLogs } = repositories;
 
@@ -69,14 +70,47 @@ export function scheduleRoutes({ repositories }) {
     });
 
   const audit = (req, departmentId, action, details) =>
-    auditLogs.create(req.orgId, {
-      departmentId,
-      userId: req.user.id,
-      action,
-      details,
-      ip: req.ip,
-      timestamp: new Date().toISOString(),
+    recordAudit(auditLogs, req, { departmentId, action, details, now: config.now() });
+
+  /** Snapshot compacto de uma célula: só o que identifica e descreve a atribuição. */
+  const compactCell = (a) => ({
+    employeeId: a.employeeId,
+    date: a.date,
+    type: a.type,
+    ...(a.shiftId ? { shiftId: a.shiftId } : {}),
+    isPinned: Boolean(a.isPinned),
+  });
+  const compactCells = (list) => list.map(compactCell).sort((x, y) => (x.date + x.employeeId).localeCompare(y.date + y.employeeId));
+  /** Resumo do novo estado (contagens por tipo), sem repetir as células. */
+  const summarize = (list) => ({
+    total: list.length,
+    work: list.filter((a) => a.type === 'WORK').length,
+    off: list.filter((a) => a.type === 'OFF').length,
+    absence: list.filter((a) => a.type === 'ABSENCE').length,
+    pinned: list.filter((a) => a.isPinned).length,
+  });
+
+  /**
+   * Grava a auditoria de uma alteração da semana: estado anterior (snapshot) e resumo do novo.
+   * Se a semana estava publicada, o salvamento a devolveu para rascunho e isso também é registrado.
+   */
+  async function auditWeekChange(req, department, action, weekStartDate, before, previousCycle, after) {
+    await audit(req, department.id, action, {
+      weekStartDate,
+      message: `Semana ${weekStartDate}: ${after.length} atribuições (antes: ${before.length}).`,
+      statusBefore: previousCycle?.status ?? null,
+      before: compactCells(before),
+      after: summarize(after),
     });
+    if (previousCycle?.status === 'PUBLISHED') {
+      await audit(req, department.id, 'VOLTOU_PARA_RASCUNHO', {
+        weekStartDate,
+        message: `A semana ${weekStartDate} estava publicada e foi editada; voltou para rascunho e precisa ser publicada de novo.`,
+        publishedAt: previousCycle.publishedAt ?? null,
+        publishedBy: previousCycle.publishedBy ?? null,
+      });
+    }
+  }
 
   /** Remove campos internos e normaliza o shiftId antes de persistir. */
   const toStored = (a) => ({
@@ -92,10 +126,12 @@ export function scheduleRoutes({ repositories }) {
     const { departmentId, weekStart } = scheduleQuerySchema.parse(req.query);
     const department = await scopedDepartment(req, departmentId);
     const ctx = await loadContext(req.orgId, department, weekStart);
+    const cycle = await schedules.findCycle(req.orgId, departmentId, weekStart);
     sendOk(res, {
       departmentId,
       weekStartDate: weekStart,
-      cycle: await schedules.findCycle(req.orgId, departmentId, weekStart),
+      status: cycle?.status ?? 'DRAFT',
+      cycle,
       assignments: ctx.assignments,
       validation: validate(weekStart, ctx, ctx.assignments),
     });
@@ -121,13 +157,14 @@ export function scheduleRoutes({ repositories }) {
       seen.add(key);
     }
 
+    const previousCycle = await schedules.findCycle(req.orgId, department.id, input.weekStartDate);
     const saved = await schedules.saveWeek(req.orgId, {
       departmentId: department.id,
       weekStartDate: input.weekStartDate,
       cycleWeek: getCycleWeek(input.weekStartDate),
       assignments: input.assignments.map(toStored),
     });
-    await audit(req, department.id, 'SALVOU_ESCALA', `Semana ${input.weekStartDate}: ${saved.assignments.length} atribuições salvas.`);
+    await auditWeekChange(req, department, 'SALVOU_ESCALA', input.weekStartDate, ctx.assignments, previousCycle, saved.assignments);
     sendOk(res, { cycle: saved.cycle, assignments: saved.assignments, validation: validate(input.weekStartDate, ctx, saved.assignments) });
   });
 
@@ -156,14 +193,55 @@ export function scheduleRoutes({ repositories }) {
       peakDates: input.peakDates,
     });
 
+    const previousCycle = await schedules.findCycle(req.orgId, department.id, input.weekStartDate);
     const saved = await schedules.saveWeek(req.orgId, {
       departmentId: department.id,
       weekStartDate: input.weekStartDate,
       cycleWeek: getCycleWeek(input.weekStartDate),
       assignments: generated.assignments.map(toStored),
     });
-    await audit(req, department.id, 'GEROU_ESCALA', `Semana ${input.weekStartDate}: escala gerada (${saved.assignments.length} atribuições).`);
+    await auditWeekChange(req, department, 'GEROU_ESCALA', input.weekStartDate, ctx.assignments, previousCycle, saved.assignments);
     sendOk(res, { cycle: saved.cycle, assignments: saved.assignments, validation: generated.validation });
+  });
+
+  /** Quantidade máxima de alertas vermelhos devolvidos no 409 de publicação. */
+  const MAX_BLOCKING_ISSUES = 50;
+
+  router.post('/publish', requireRole(...WRITE_ROLES), async (req, res) => {
+    const input = schedulePublishSchema.parse(req.body ?? {});
+    const department = await scopedDepartment(req, input.departmentId);
+    const cycle = await schedules.findCycle(req.orgId, department.id, input.weekStartDate);
+    if (!cycle) throw new AppError(422, 'NOT_ENOUGH_DATA', 'Salve ou gere a escala da semana antes de publicar.');
+    if (cycle.status === 'PUBLISHED') {
+      sendOk(res, { cycle, alreadyPublished: true });
+      return;
+    }
+
+    const ctx = await loadContext(req.orgId, department, input.weekStartDate);
+    if (ctx.assignments.length === 0) throw new AppError(422, 'NOT_ENOUGH_DATA', 'A semana não tem atribuições para publicar.');
+    const validation = validate(input.weekStartDate, ctx, ctx.assignments);
+    if (validation.summary.red > 0) {
+      const blocking = validation.issues
+        .filter((i) => i.severity === 'RED')
+        .slice(0, MAX_BLOCKING_ISSUES)
+        .map(({ code, severity, employeeId, date, message }) => ({ code, severity, employeeId, date, message }));
+      throw new AppError(409, 'SCHEDULE_HAS_VIOLATIONS', `A escala tem ${validation.summary.red} alerta(s) vermelho(s) e não pode ser publicada.`, {
+        red: validation.summary.red,
+        issues: blocking,
+      });
+    }
+
+    const publishedAt = config.now().toISOString();
+    const published = found(await schedules.publishCycle(req.orgId, cycle.id, { publishedAt, publishedBy: req.user.id }));
+    await audit(req, department.id, 'PUBLICOU_ESCALA', {
+      weekStartDate: input.weekStartDate,
+      message: `Semana ${input.weekStartDate} publicada.`,
+      publishedAt,
+      publishedBy: req.user.id,
+      validation: validation.summary,
+      assignments: compactCells(ctx.assignments),
+    });
+    sendOk(res, { cycle: published, validation: { status: validation.status, summary: validation.summary } });
   });
 
   return router;

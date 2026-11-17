@@ -3,14 +3,15 @@ import jwt from 'jsonwebtoken';
 export const TOKEN_TTL = '7d';
 
 /**
- * Assina o JWT de sessão (HS256, 7 dias) com `sub`, `organizationId` e `role`.
- * @param {{ id: string, organizationId: string, role: string }} user
+ * Assina o JWT de sessão (HS256, 7 dias) com `sub`, `organizationId`, `role` e `tv` (versão do token
+ * do usuário; subir `tokenVersion` revoga todos os tokens anteriores).
+ * @param {{ id: string, organizationId: string, role: string, tokenVersion?: number }} user
  * @param {string} secret
  * @param {{ expiresIn?: string | number }} [options]
  * @returns {string}
  */
 export function signToken(user, secret, { expiresIn = TOKEN_TTL } = {}) {
-  return jwt.sign({ organizationId: user.organizationId, role: user.role }, secret, {
+  return jwt.sign({ organizationId: user.organizationId, role: user.role, tv: user.tokenVersion ?? 0 }, secret, {
     algorithm: 'HS256',
     expiresIn,
     subject: user.id,

@@ -25,6 +25,9 @@ export function requireAuth({ repositories, config }) {
     const user = payload.sub ? await repositories.users.get(payload.sub) : null;
     if (!user || user.organizationId !== payload.organizationId) throw unauthorized('Token inválido.');
 
+    // Token emitido antes de um logout-all ou troca de senha (tokenVersion maior) está revogado.
+    if ((payload.tv ?? 0) !== (user.tokenVersion ?? 0)) throw new AppError(401, 'TOKEN_REVOKED', 'Sessão encerrada. Entre novamente.');
+
     req.user = user;
     next();
   };

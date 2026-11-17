@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { recordAudit } from '../audit.js';
 import { AppError, found, sendOk } from '../errors.js';
 import { requireRole } from '../middleware/auth.js';
 import { userCreateSchema } from '../schemas.js';
@@ -31,13 +32,7 @@ export function userRoutes({ repositories }) {
       role: input.role,
       departmentIds,
     });
-    await auditLogs.create(req.orgId, {
-      userId: req.user.id,
-      action: 'CRIOU_USUARIO',
-      details: `Usuário ${user.email} criado com o papel ${user.role}.`,
-      ip: req.ip,
-      timestamp: new Date().toISOString(),
-    });
+    await recordAudit(auditLogs, req, { action: 'CRIOU_USUARIO', details: `Usuário ${user.email} criado com o papel ${user.role}.` });
     sendOk(res, publicUser(user), 201);
   });
 

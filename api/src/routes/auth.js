@@ -1,9 +1,10 @@
 import { Router } from 'express';
 import { randomBytes } from 'node:crypto';
 import { getEffectivePlan } from '@escala/shared/utils/planPermissions.js';
+import { recordAudit } from '../audit.js';
 import { AppError, sendOk, unauthorized } from '../errors.js';
 import { effectivePlan, requireAuth, tenantScope } from '../middleware/auth.js';
-import { loginSchema, registerSchema } from '../schemas.js';
+import { changePasswordSchema, loginSchema, registerSchema } from '../schemas.js';
 import { DUMMY_HASH, hashPassword, verifyPassword } from '../security/password.js';
 import { signToken } from '../security/tokens.js';
 
@@ -25,7 +26,7 @@ async function uniqueReferralCode(organizations) {
 
 /** Usuário sem o hash da senha. */
 export function publicUser(user) {
-  const { passwordHash: _hash, ...safe } = user;
+  const { passwordHash: _hash, tokenVersion: _tv, ...safe } = user;
   return safe;
 }
 
@@ -88,6 +89,24 @@ export function authRoutes(deps) {
 
   router.get('/me', requireAuth(deps), tenantScope, effectivePlan(deps), (req, res) => {
     sendOk(res, { user: publicUser(req.user), organization: publicOrg(req.org, config.now()) });
+  });
+
+  /** Encerra todas as sessões do usuário (inclusive esta): tokens antigos passam a dar TOKEN_REVOKED. */
+  router.post('/logout-all', requireAuth(deps), async (req, res) => {
+    await repositories.users.bumpTokenVersion(req.user.id);
+    await recordAudit(repositories.auditLogs, req, { action: 'ENCERROU_SESSOES', details: 'Todas as sessões do usuário foram encerradas.', now: config.now() }, req.user.organizationId);
+    res.status(204).end();
+  });
+
+  /** Troca a senha (exige a atual), revoga os tokens anteriores e devolve um token novo. */
+  router.post('/change-password', requireAuth(deps), async (req, res) => {
+    const input = changePasswordSchema.parse(req.body ?? {});
+    if (!(await verifyPassword(input.currentPassword, req.user.passwordHash))) {
+      throw new AppError(403, 'INVALID_PASSWORD', 'A senha atual está incorreta.');
+    }
+    const user = await repositories.users.changePassword(req.user.id, await hashPassword(input.newPassword));
+    await recordAudit(repositories.auditLogs, req, { action: 'ALTEROU_SENHA', details: 'Senha alterada; sessões anteriores encerradas.', now: config.now() }, req.user.organizationId);
+    sendOk(res, { token: signToken(user, config.jwtSecret) });
   });
 
   return router;

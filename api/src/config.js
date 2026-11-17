@@ -4,6 +4,8 @@ const DEV_CORS_ORIGINS = ['http://localhost:5173', 'http://127.0.0.1:5173'];
 const MIN_SECRET_LENGTH = 32;
 /** Prefixo do valor de exemplo do `.env.example`, que nunca deve ir para produção. */
 const EXAMPLE_SECRET_PREFIX = 'troque-isto';
+/** Retenção padrão do IP no log de auditoria (LGPD), em dias; AUDIT_IP_RETENTION_DAYS sobrescreve. */
+export const DEFAULT_AUDIT_IP_RETENTION_DAYS = 180;
 
 /**
  * @typedef {Object} AppConfig
@@ -17,6 +19,7 @@ const EXAMPLE_SECRET_PREFIX = 'troque-isto';
  * @property {number | boolean} trustProxy
  * @property {{ windowMs: number, authMax: number, publicMax: number }} rateLimit
  * @property {{ info: Function, warn: Function, error: Function }} logger
+ * @property {number} auditIpRetentionDays - idade (dias) a partir da qual o IP do AuditLog é removido
  * @property {() => Date} now - relógio injetável (testes)
  */
 
@@ -84,6 +87,7 @@ export function loadConfig(env = process.env, { logger = console } = {}) {
     publicAppUrl: (env.PUBLIC_APP_URL || 'https://planilhaescala5x2.com.br').replace(/\/+$/, ''),
     trustProxy,
     rateLimit: { windowMs: 15 * 60 * 1000, authMax: 20, publicMax: 60 },
+    auditIpRetentionDays: Number.isInteger(Number(env.AUDIT_IP_RETENTION_DAYS)) && Number(env.AUDIT_IP_RETENTION_DAYS) > 0 ? Number(env.AUDIT_IP_RETENTION_DAYS) : DEFAULT_AUDIT_IP_RETENTION_DAYS,
     logger: quiet ? { info() {}, warn() {}, error() {} } : logger,
     now: () => new Date(),
   };

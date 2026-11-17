@@ -6,7 +6,14 @@ import { getLegalWeeklyCapHours, getShiftWindow, MAX_BREAK_MINUTES } from '@esca
 export const dateString = z
   .string()
   .regex(/^\d{4}-\d{2}-\d{2}$/, 'Use o formato AAAA-MM-DD.')
-  .refine((v) => formatDate(parseDate(v)) === v, 'Data inexistente.');
+  .refine((v) => {
+    // O refine roda mesmo quando o regex falhou; texto fora do padrão não pode estourar em parseDate.
+    try {
+      return formatDate(parseDate(v)) === v;
+    } catch {
+      return false;
+    }
+  }, 'Data inexistente.');
 
 /** Segunda-feira no formato 'YYYY-MM-DD'. */
 export const mondayString = dateString.refine(isMonday, 'A semana deve começar numa segunda-feira.');
@@ -22,6 +29,32 @@ export const registerSchema = z.object({
   password: z.string().min(8, 'A senha deve ter ao menos 8 caracteres.').max(128),
   organizationName: name.optional(),
   referredByCode: z.string().trim().max(32).optional(),
+});
+
+export const changePasswordSchema = z.object({
+  currentPassword: z.string().min(1).max(128),
+  newPassword: z.string().min(8, 'A senha deve ter ao menos 8 caracteres.').max(128),
+});
+
+/** Exclusão da organização (LGPD): exige reenviar a senha do OWNER. */
+export const deleteOrganizationSchema = z.object({ password: z.string().min(1).max(128) });
+
+export const MAX_AUDIT_PAGE_SIZE = 100;
+export const DEFAULT_AUDIT_PAGE_SIZE = 50;
+
+export const auditLogQuerySchema = z
+  .object({
+    departmentId: z.string().min(1).optional(),
+    from: dateString.optional(),
+    to: dateString.optional(),
+    limit: z.coerce.number().int().min(1).max(MAX_AUDIT_PAGE_SIZE).default(DEFAULT_AUDIT_PAGE_SIZE),
+    offset: z.coerce.number().int().min(0).default(0),
+  })
+  .refine((q) => !q.from || !q.to || q.to >= q.from, { message: 'A data final deve ser igual ou posterior à inicial.', path: ['to'] });
+
+export const schedulePublishSchema = z.object({
+  departmentId: z.string().min(1),
+  weekStartDate: mondayString,
 });
 
 export const loginSchema = z.object({

@@ -192,6 +192,7 @@ model UserAccount {
   passwordHash   String
   phone          String?
   role           UserRole @default(OWNER)
+  tokenVersion   Int      @default(0) // incrementa em logout-all e troca de senha; o JWT carrega `tv`
   createdAt      DateTime @default(now())
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
@@ -340,8 +341,8 @@ model AuditLog {
   departmentId   String?
   userId         String?
   action         String
-  details        String
-  ip             String?
+  details        String // JSON serializado (estado anterior e resumo do novo estado)
+  ip             String? // anonimizado ao gravar; removido após o prazo de retenção
   timestamp      DateTime @default(now())
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
@@ -349,4 +350,5 @@ model AuditLog {
   user         UserAccount? @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   @@index([organizationId, timestamp])
+  @@index([organizationId, departmentId, timestamp])
 }

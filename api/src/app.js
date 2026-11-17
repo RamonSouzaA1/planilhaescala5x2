@@ -6,7 +6,11 @@ import { loadConfig } from './config.js';
 import { createMemoryRepositories } from './repositories/memory.js';
 import { effectivePlan, requireAuth, tenantScope } from './middleware/auth.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
+import { auditLogRoutes } from './routes/auditLogs.js';
 import { authRoutes } from './routes/auth.js';
+import { maintenanceRoutes } from './routes/maintenance.js';
+import { organizationRoutes } from './routes/organization.js';
+import { privacyRoutes } from './routes/privacy.js';
 import { publicRoutes } from './routes/public.js';
 import { resourceRoutes } from './routes/resources.js';
 import { scheduleRoutes } from './routes/schedules.js';
@@ -66,6 +70,9 @@ export function createApp({ repositories = createMemoryRepositories(), config: o
   const { windowMs, authMax, publicMax } = config.rateLimit;
   app.use('/api/auth', limiter(windowMs, authMax), authRoutes(deps));
   app.use('/api/public', limiter(windowMs, publicMax), publicRoutes(deps));
+  app.use('/api/privacy', limiter(windowMs, publicMax), privacyRoutes(deps));
+  // Exclusão da organização confere a senha: mesmo limite das rotas de autenticação.
+  app.delete('/api/organizations/me', limiter(windowMs, authMax));
 
   // Tudo abaixo exige login; o escopo de organização vem sempre do token.
   const guard = [requireAuth(deps), tenantScope, effectivePlan(deps)];
@@ -76,6 +83,9 @@ export function createApp({ repositories = createMemoryRepositories(), config: o
   app.use('/api/absences', guard, resources.absences);
   app.use('/api/schedules', guard, scheduleRoutes(deps));
   app.use('/api/users', guard, userRoutes(deps));
+  app.use('/api/audit-logs', guard, auditLogRoutes(deps));
+  app.use('/api/organizations', guard, organizationRoutes(deps));
+  app.use('/api/maintenance', guard, maintenanceRoutes(deps));
 
   app.use(notFoundHandler);
   app.use(errorHandler(config));

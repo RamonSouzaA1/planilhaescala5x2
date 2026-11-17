@@ -96,6 +96,17 @@ function crud(delegate) {
  * @returns {import('./index.js').Repositories}
  */
 export function createPrismaRepositories(prisma) {
+  /** Atualiza um usuário e devolve o registro de domínio (null se não existir). */
+  const updateUser = async (id, data) => {
+    try {
+      return userFromDb(await prisma.userAccount.update({ where: { id }, data, include: USER_INCLUDE }));
+    } catch (error) {
+      if (error?.code === 'P2025') return null;
+      throw error;
+    }
+  };
+  const auditCrud = crud(prisma.auditLog);
+
   return {
     accounts: {
       async register({ organization, user }) {
@@ -126,6 +137,52 @@ export function createPrismaRepositories(prisma) {
       async findByReferralCode(code) {
         return fromDb(await prisma.organization.findUnique({ where: { referralCode: code } }));
       },
+      /** Apaga a organização; o onDelete: Cascade do schema remove todo o resto. */
+      async remove(id) {
+        try {
+          await prisma.organization.delete({ where: { id } });
+          return true;
+        } catch (error) {
+          if (error?.code === 'P2025') return false;
+          throw error;
+        }
+      },
+      /** Todos os dados da organização, sem filtrar segredos (a rota de exportação os remove). */
+      async exportData(id) {
+        const organization = await prisma.organization.findUnique({ where: { id } });
+        if (!organization) return null;
+        const where = { organizationId: id };
+        const [users, stores, departments, employees, shifts, coverageRules, absences, scheduleCycles, dailyAssignments, swapRequests, paymentTransactions, auditLogs] =
+          await Promise.all([
+            prisma.userAccount.findMany({ where, include: USER_INCLUDE }),
+            prisma.store.findMany({ where }),
+            prisma.department.findMany({ where }),
+            prisma.employee.findMany({ where }),
+            prisma.shiftTemplate.findMany({ where }),
+            prisma.coverageRule.findMany({ where }),
+            prisma.absence.findMany({ where }),
+            prisma.scheduleCycle.findMany({ where }),
+            prisma.dailyAssignment.findMany({ where }),
+            prisma.shiftSwapRequest.findMany({ where }),
+            prisma.paymentTransaction.findMany({ where }),
+            prisma.auditLog.findMany({ where, orderBy: { timestamp: 'asc' } }),
+          ]);
+        return {
+          organization: fromDb(organization),
+          users: users.map(userFromDb),
+          stores: stores.map(fromDb),
+          departments: departments.map(fromDb),
+          employees: employees.map(fromDb),
+          shifts: shifts.map(fromDb),
+          coverageRules: coverageRules.map(fromDb),
+          absences: absences.map(fromDb),
+          scheduleCycles: scheduleCycles.map(fromDb),
+          dailyAssignments: dailyAssignments.map(fromDb),
+          swapRequests: swapRequests.map(fromDb),
+          paymentTransactions: paymentTransactions.map(fromDb),
+          auditLogs: auditLogs.map(fromDb),
+        };
+      },
     },
     users: {
       async findByEmail(email) {
@@ -151,6 +208,14 @@ export function createPrismaRepositories(prisma) {
           return rethrowUser(error);
         }
       },
+      /** Revoga todos os tokens do usuário (incrementa tokenVersion). */
+      async bumpTokenVersion(id) {
+        return updateUser(id, { tokenVersion: { increment: 1 } });
+      },
+      /** Troca o hash da senha e revoga os tokens emitidos antes (incrementa tokenVersion). */
+      async changePassword(id, passwordHash) {
+        return updateUser(id, { passwordHash, tokenVersion: { increment: 1 } });
+      },
     },
     departments: crud(prisma.department),
     employees: {
@@ -163,7 +228,32 @@ export function createPrismaRepositories(prisma) {
     shifts: crud(prisma.shiftTemplate),
     absences: crud(prisma.absence),
     coverageRules: crud(prisma.coverageRule),
-    auditLogs: crud(prisma.auditLog),
+    // Trilha imutável: só criar, ler e anonimizar IP vencido (sem update/remove).
+    auditLogs: {
+      list: auditCrud.list,
+      get: auditCrud.get,
+      create: auditCrud.create,
+      count: auditCrud.count,
+      /** Página dos registros mais recentes primeiro, com total. */
+      async query(orgId, { departmentIds, from, to, limit, offset }) {
+        const where = { organizationId: orgId };
+        if (departmentIds) where.departmentId = { in: departmentIds };
+        if (from || to) where.timestamp = { ...(from && { gte: new Date(from) }), ...(to && { lt: new Date(to) }) };
+        const [rows, total] = await Promise.all([
+          prisma.auditLog.findMany({ where, orderBy: [{ timestamp: 'desc' }, { id: 'desc' }], skip: offset, take: limit }),
+          prisma.auditLog.count({ where }),
+        ]);
+        return { items: rows.map(fromDb), total };
+      },
+      /** Remove o IP dos registros da organização anteriores a cutoff (ISO); devolve quantos mudaram. */
+      async purgeIps(orgId, cutoff) {
+        const result = await prisma.auditLog.updateMany({
+          where: { organizationId: orgId, ip: { not: null }, timestamp: { lt: new Date(cutoff) } },
+          data: { ip: null },
+        });
+        return result.count;
+      },
+    },
     schedules: {
       async findCycle(orgId, departmentId, weekStartDate) {
         return fromDb(await prisma.scheduleCycle.findFirst({ where: { organizationId: orgId, departmentId, weekStartDate } }));
@@ -183,12 +273,22 @@ export function createPrismaRepositories(prisma) {
       async countByShift(orgId, shiftId) {
         return prisma.dailyAssignment.count({ where: { organizationId: orgId, shiftId } });
       },
+      /** Marca o ciclo como publicado. */
+      async publishCycle(orgId, cycleId, { publishedAt, publishedBy }) {
+        const result = await prisma.scheduleCycle.updateMany({
+          where: { id: cycleId, organizationId: orgId },
+          data: { status: 'PUBLISHED', publishedAt: new Date(publishedAt), publishedBy },
+        });
+        if (result.count === 0) return null;
+        return fromDb(await prisma.scheduleCycle.findFirst({ where: { id: cycleId, organizationId: orgId } }));
+      },
       async saveWeek(orgId, { departmentId, weekStartDate, cycleWeek, assignments }) {
         return prisma.$transaction(async (tx) => {
           const cycle = await tx.scheduleCycle.upsert({
             where: { departmentId_weekStartDate: { departmentId, weekStartDate } },
             create: { organizationId: orgId, departmentId, weekStartDate, cycleWeek },
-            update: { cycleWeek },
+            // Editar uma semana publicada a devolve para rascunho.
+            update: { cycleWeek, status: 'DRAFT', publishedAt: null, publishedBy: null },
           });
           await tx.dailyAssignment.deleteMany({ where: { scheduleCycleId: cycle.id, organizationId: orgId } });
           await tx.dailyAssignment.createMany({
