@@ -83,11 +83,13 @@ O validador checa a escala com estes parâmetros:
 - **Jornada diária**: máximo de 10 horas por dia.
 - **Dias seguidos**: máximo de 6 dias de trabalho seguidos.
 - **Rodízio de domingo**: 1 em cada 3 domingos por padrão, ou 1 em 2 como opção. A regra individual do colaborador prevalece sobre a do setor.
-- **Carga semanal (EC 141/2026)**: meta de 42 horas semanais a partir de dez/2026 e de 40 horas a partir de dez/2027, configurável por setor.
+- **Carga semanal (EC 141/2026)**: teto legal de 44h até 14/12/2026, 42h a partir de 15/12/2026 e 40h a partir de 15/12/2027, aplicado automaticamente pela data da semana; o setor pode definir uma meta menor.
+- **Três domingos seguidos (Lei 10.101/2000, art. 6º)**: trabalhar o terceiro domingo consecutivo é infração, em qualquer regra de rodízio.
+- **Hora noturna (art. 73 CLT e Súmula 60, II)**: 22h–05h contam como hora reduzida de 52min30s; quando o turno cobre toda essa faixa, as horas após as 05h também.
 
 > **Aviso:** o validador é um auxílio para planejar a escala. Ele não substitui a assessoria jurídica nem a análise do departamento pessoal. Convenções coletivas e acordos específicos podem trazer regras diferentes das acima.
 
-Limitações conhecidas (com a correção prevista no backlog, seção 9): o teto de horas ainda não muda automaticamente pela data, e a regra de domingo personalizada ainda não alerta sobre três domingos seguidos.
+Prioridade do gerador: quando não dá para atender tudo, a lei vem primeiro, depois o rodízio de domingo e por último as restrições individuais (que viram alerta amarelo).
 
 ## Deploy
 
